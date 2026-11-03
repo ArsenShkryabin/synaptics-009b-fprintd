@@ -125,7 +125,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut finger_down = false;
 
             for _ in 0..300 {
-                match capture.capture(&program, CaptureOpts::stream(sync_frames), || true)? {
+                let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || true) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("transient frame error: {e}");
+                        std::thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                };
+                match outcome {
                     CaptureOutcome::Stream(raw) => {
                         if let Some(img) = reconstruct_sync_frame(&raw.bytes, layout, params) {
                             let mut sum: u64 = 0;
@@ -236,8 +244,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let mut matched_finger = None;
 
-            for _ in 0..150 {
-                match capture.capture(&program, CaptureOpts::stream(sync_frames), || true)? {
+            for _ in 0..300 {
+                let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || true) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("transient frame error: {e}");
+                        std::thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                };
+                match outcome {
                     CaptureOutcome::Stream(raw) => {
                         if let Some(img) = reconstruct_sync_frame(&raw.bytes, layout, params) {
                             let mut sum: u64 = 0;
