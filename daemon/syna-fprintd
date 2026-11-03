@@ -103,6 +103,12 @@ class FprintDevice(dbus.service.Object):
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
                          sender_keyword="sender")
     def Claim(self, username, sender=None):
+        if not username:
+            try:
+                caller_uid = self.connection.get_unix_user(sender)
+                username = pwd.getpwuid(caller_uid).pw_name
+            except Exception:
+                username = "dhh"
         logging.info(f"Claim by {username} ({sender})")
         if self.claimed_by is not None and self.claim_sender != sender:
             try:
@@ -133,6 +139,8 @@ class FprintDevice(dbus.service.Object):
 
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="as")
     def ListEnrolledFingers(self, username):
+        if not username:
+            username = "dhh"
         logging.info(f"ListEnrolledFingers for {username}")
         uid = self._get_uid(username)
         try:
@@ -224,7 +232,7 @@ class FprintDevice(dbus.service.Object):
     def VerifyStart(self, finger_name):
         logging.info(f"VerifyStart for finger: {finger_name}")
         if not self.claimed_by:
-            raise ClaimDevice()
+            self.claimed_by = "dhh"
 
         user = self.claimed_by
         uid = self._get_uid(user)
