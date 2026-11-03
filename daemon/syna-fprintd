@@ -269,10 +269,17 @@ class FprintDevice(dbus.service.Object):
                         matched = True
                         matched_name = line.split(":", 1)[1]
                         break
+                    elif line.startswith("PROGRESS:"):
+                        status_str = line.split(":", 1)[1]
+                        GLib.idle_add(self.VerifyStatus, status_str, False)
                     elif line == "NO_MATCH":
                         break
 
                 proc.wait()
+
+                err = proc.stderr.read() if proc.stderr else ""
+                if err:
+                    logging.info(f"syna-tool stderr: {err}")
 
                 if not self.stop_requested:
                     if matched:

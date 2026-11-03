@@ -243,6 +243,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::io::stdout().flush()?;
 
             let mut matched_finger = None;
+            let mut retry_throttle = std::time::Instant::now();
 
             for _ in 0..300 {
                 let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || true) {
@@ -258,7 +259,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(img) = reconstruct_sync_frame(&raw.bytes, layout, params) {
                             let mut sum: u64 = 0;
                             for &p in &img.pixels { sum += p as u64; }
-                            let avg = sum as f64 / img.pixels.len() as f64;
+                            let _avg = sum as f64 / img.pixels.len() as f64;
                             let mut min = 255u8;
                             let mut max = 0u8;
                             for &p in &img.pixels {
@@ -292,6 +293,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         if matched_finger.is_some() {
                                             break;
+                                        } else if retry_throttle.elapsed() > Duration::from_millis(800) {
+                                            retry_throttle = std::time::Instant::now();
+                                            println!("PROGRESS:verify-retry-scan");
+                                            std::io::stdout().flush()?;
                                         }
                                     }
                                     Err(e) => eprintln!("EXTRACT_ERROR: {e:?}"),
