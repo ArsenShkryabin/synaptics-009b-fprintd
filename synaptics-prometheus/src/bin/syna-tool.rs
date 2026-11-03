@@ -131,14 +131,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut sum: u64 = 0;
                             for &p in &img.pixels { sum += p as u64; }
                             let avg = sum as f64 / img.pixels.len() as f64;
-                            let mut var_sum = 0f64;
+                            let mut min = 255u8;
+                            let mut max = 0u8;
                             for &p in &img.pixels {
-                                let d = p as f64 - avg;
-                                var_sum += d * d;
+                                if p < min { min = p; }
+                                if p > max { max = p; }
                             }
-                            let var = (var_sum / img.pixels.len() as f64) as i32;
-
-                            let touching = var > 1200;
+                            let diff = max as i32 - min as i32;
+                            let touching = diff > 130;
 
                             if touching && !finger_down {
                                 finger_down = true;
@@ -168,6 +168,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
+
+            let _ = capture.finish();
+            let _ = session.reboot_sensor();
 
             if stage >= 4 || enroll.is_complete() {
                 let blob = enroll.finalize()?;
@@ -241,14 +244,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let mut sum: u64 = 0;
                             for &p in &img.pixels { sum += p as u64; }
                             let avg = sum as f64 / img.pixels.len() as f64;
-                            let mut var_sum = 0f64;
+                            let mut min = 255u8;
+                            let mut max = 0u8;
                             for &p in &img.pixels {
-                                let d = p as f64 - avg;
-                                var_sum += d * d;
+                                if p < min { min = p; }
+                                if p > max { max = p; }
                             }
-                            let var = (var_sum / img.pixels.len() as f64) as i32;
+                            let diff = max as i32 - min as i32;
 
-                            if var > 1200 {
+                            if diff > 130 {
                                 let cond = synaptics_prometheus::reconstruct::condition_onchip(&img.pixels, None, img.width, img.height);
                                 let cond_img = ConditionedImage {
                                     pixels: &cond.pixels,
@@ -256,18 +260,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     height: img.height as u16,
                                     stride: img.width as u16,
                                 };
-                                if let Ok(probe) = backend.extract_template(cond_img) {
-                                    for (st, blob) in &templates {
-                                        if let Ok(res) = backend.verify(&probe, blob, MatchLevel::Level1) {
-                                            if res.matched {
-                                                matched_finger = Some(*st);
-                                                break;
+                                match backend.extract_template(cond_img) {
+                                    Ok(probe) => {
+                                        for (st, blob) in &templates {
+                                            match backend.verify(&probe, blob, MatchLevel::Level1) {
+                                                Ok(res) => {
+                                                    eprintln!("VERIFY_ATTEMPT: diff={diff} anchors={} score={}/{} matched={}",
+                                                        res.anchor_count, res.score, res.threshold, res.matched);
+                                                    if res.matched {
+                                                        matched_finger = Some(*st);
+                                                        break;
+                                                    }
+                                                }
+                                                Err(e) => eprintln!("VERIFY_ERROR: {e:?}"),
                                             }
                                         }
+                                        if matched_finger.is_some() {
+                                            break;
+                                        }
                                     }
-                                    if matched_finger.is_some() {
-                                        break;
-                                    }
+                                    Err(e) => eprintln!("EXTRACT_ERROR: {e:?}"),
                                 }
                             }
                         }
@@ -277,6 +289,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(Duration::from_millis(80));
             }
 
+            let _ = capture.finish();
+            let _ = session.reboot_sensor();
             if let Some(st) = matched_finger {
                 println!("MATCH:{}", subtype_to_name(st));
                 std::io::stdout().flush()?;
