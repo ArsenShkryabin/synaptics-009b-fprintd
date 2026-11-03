@@ -505,7 +505,12 @@ impl<'s, T: Transport> CaptureSession<'s, T> {
             self.cfg.sync_layout(opts.sync_frames).wire_stride(),
             self.cfg.stream_req_lines(opts.sync_frames) as usize,
         );
-        let raw = if opts.recover {
+        let is_already_armed = self.armed.as_ref().map_or(false, |a| a.read == opts.read && a.serialized == bytes && (a.arm_status == 0 || a.arm_status == 0x0412 || a.arm_status == 0x0450));
+        let raw = if is_already_armed {
+            use crate::capture::CaptureIo;
+            let frame_bytes = CaptureIo::read_frame(self.session, capturer.frame_size())?;
+            RawFrame { arm_status: 0, bytes: frame_bytes }
+        } else if opts.recover {
             // Guarantee #3 — the stream fault site (reboot + single re-arm) lives in
             // `capture_one_recovering`; reuse it rather than duplicating the predicate.
             self.session.capture_one_recovering(&capturer, &bytes, opts.pre_arm)?
