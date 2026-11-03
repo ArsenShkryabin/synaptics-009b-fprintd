@@ -269,7 +269,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             let diff = max as i32 - min as i32;
 
-                            if diff > 130 {
+                            if diff > 175 {
                                 let cond = synaptics_prometheus::reconstruct::condition_onchip(&img.pixels, None, img.width, img.height);
                                 let cond_img = ConditionedImage {
                                     pixels: &cond.pixels,
@@ -282,7 +282,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         for (st, blob) in &templates {
                                             match backend.verify(&probe, blob, MatchLevel::Level1) {
                                                 Ok(res) => {
-                                                    eprintln!("VERIFY_ATTEMPT: diff={diff} anchors={} score={}/{} matched={}",
+                                                    eprintln!("VERIFY: diff={diff} anchors={} score={}/{} matched={}",
                                                         res.anchor_count, res.score, res.threshold, res.matched);
                                                     if res.matched {
                                                         matched_finger = Some(*st);
@@ -294,10 +294,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                         if matched_finger.is_some() {
                                             break;
-                                        } else if retry_throttle.elapsed() > Duration::from_millis(800) {
-                                            retry_throttle = std::time::Instant::now();
-                                            println!("PROGRESS:verify-retry-scan");
-                                            std::io::stdout().flush()?;
                                         }
                                     }
                                     Err(e) => eprintln!("EXTRACT_ERROR: {e:?}"),
