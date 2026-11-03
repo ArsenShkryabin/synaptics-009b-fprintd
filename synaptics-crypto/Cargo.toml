@@ -1,0 +1,19 @@
+[package]
+name = "synaptics-crypto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "The Synaptics Prometheus secure-session crypto: AES-CBC/HMAC/PRF primitives, the TLS record layer + session keys, the ECDH handshake, and pairing cert-store unseal. Family-wide constants (verified vs python-validity)."
+license.workspace = true
+
+[dependencies]
+synaptics-core = { path = "../synaptics-core" }
+synaptics-transport = { path = "../synaptics-transport" }
+p256.workspace = true
+aes.workspace = true
+cbc.workspace = true
+hmac.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

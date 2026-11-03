@@ -1,0 +1,20 @@
+[package]
+name = "synaptics-prometheus-qm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Research-only Synaptics QM matcher port (vendor-derived, not for distribution)."
+license.workspace = true
+publish = false
+
+# Every magic constant is annotated `// ghidra: <fn>@<addr>` back to synaWudfBioUsb.dll RE.
+# See ../docs/qm/qm-pipeline.md.
+
+[dependencies]
+synaptics-biometric = { path = "../synaptics-biometric" }
+thiserror.workspace = true
+sha2.workspace = true
+
+
+[lints]
+workspace = true

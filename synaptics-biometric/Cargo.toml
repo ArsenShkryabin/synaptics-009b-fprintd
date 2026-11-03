@@ -1,0 +1,13 @@
+[package]
+name = "synaptics-biometric"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Algorithm-neutral host-side biometric backend interface (extract / match / enroll / verify) — the swappable seam shared by the driver, the QM matcher, and any OSS matcher."
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[lints]
+workspace = true

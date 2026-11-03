@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""
+syna-fprintd — Drop-in net.reactivated.Fprint D-Bus daemon for Synaptics Prometheus (06cb:009b).
+Provides standard Fprint Manager and Device interfaces for fprintd-enroll, fprintd-verify, and pam_fprintd.
+"""
+
+import sys
+import os
+import pwd
+import signal
+import subprocess
+import threading
+import logging
+
+import dbus
+import dbus.service
+import dbus.mainloop.glib
+from gi.repository import GLib
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+
+dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+
+BUS_NAME = "net.reactivated.Fprint"
+MANAGER_PATH = "/net/reactivated/Fprint/Manager"
+DEVICE_PATH = "/net/reactivated/Fprint/Device/0"
+MANAGER_INTERFACE = "net.reactivated.Fprint.Manager"
+DEVICE_INTERFACE = "net.reactivated.Fprint.Device"
+
+SYNA_TOOL = "/usr/local/bin/syna-tool"
+
+class NoSuchDevice(dbus.DBusException):
+    _dbus_error_name = "net.reactivated.Fprint.Error.NoSuchDevice"
+
+class AlreadyInUse(dbus.DBusException):
+    _dbus_error_name = "net.reactivated.Fprint.Error.AlreadyInUse"
+
+class ClaimDevice(dbus.DBusException):
+    _dbus_error_name = "net.reactivated.Fprint.Error.ClaimDevice"
+
+class PermissionDenied(dbus.DBusException):
+    _dbus_error_name = "net.reactivated.Fprint.Error.PermissionDenied"
+
+class NoEnrolledPrints(dbus.DBusException):
+    _dbus_error_name = "net.reactivated.Fprint.Error.NoEnrolledPrints"
+
+
+class FprintDevice(dbus.service.Object):
+    def __init__(self, bus_name):
+        super().__init__(bus_name, DEVICE_PATH)
+        self.bus_name = bus_name
+        self.claimed_by = None
+        self.claim_sender = None
+        self.active_proc = None
+        self.worker_thread = None
+        self.stop_requested = False
+
+        self._properties = {
+            "name": dbus.String("Synaptics Prometheus (06cb:009b)"),
+            "num-enroll-stages": dbus.Int32(5),
+            "scan-type": dbus.String("press"),
+            "finger-present": dbus.Boolean(False),
+            "finger-needed": dbus.Boolean(False)
+        }
+
+    # --- org.freedesktop.DBus.Properties ---
+    @dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
+    def Get(self, interface_name, property_name):
+        if interface_name != DEVICE_INTERFACE:
+            raise dbus.exceptions.DBusException(f"Unknown interface {interface_name}")
+        if property_name not in self._properties:
+            raise dbus.exceptions.DBusException(f"Unknown property {property_name}")
+        return self._properties[property_name]
+
+    @dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
+    def GetAll(self, interface_name):
+        if interface_name != DEVICE_INTERFACE:
+            raise dbus.exceptions.DBusException(f"Unknown interface {interface_name}")
+        return self._properties
+
+    # --- Signals ---
+    @dbus.service.signal(dbus_interface=DEVICE_INTERFACE, signature="sb")
+    def EnrollStatus(self, result, done):
+        logging.info(f"Signal: EnrollStatus({result}, {done})")
+
+    @dbus.service.signal(dbus_interface=DEVICE_INTERFACE, signature="sb")
+    def VerifyStatus(self, result, done):
+        logging.info(f"Signal: VerifyStatus({result}, {done})")
+
+    @dbus.service.signal(dbus_interface=DEVICE_INTERFACE, signature="s")
+    def VerifyFingerSelected(self, finger_name):
+        logging.info(f"Signal: VerifyFingerSelected({finger_name})")
+
+    @dbus.service.signal(dbus_interface=DEVICE_INTERFACE, signature="s")
+    def VerifyFingerMatched(self, finger_name):
+        logging.info(f"Signal: VerifyFingerMatched({finger_name})")
+
+    # --- Methods ---
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
+                         sender_keyword="sender")
+    def Claim(self, username, sender=None):
+        logging.info(f"Claim by {username} ({sender})")
+        if self.claimed_by is not None and self.claim_sender != sender:
+            try:
+                self.connection.get_unix_user(self.claim_sender)
+            except Exception:
+                logging.info(f"Previous claimant {self.claim_sender} is gone, auto-releasing")
+                self._stop_current_operation()
+                self.claimed_by = None
+                self.claim_sender = None
+            if self.claimed_by is not None and self.claim_sender != sender:
+                raise AlreadyInUse()
+        self.claimed_by = username
+        self.claim_sender = sender
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="",
+                         sender_keyword="sender")
+    def Release(self, sender=None):
+        logging.info(f"Release by {sender}")
+        self._stop_current_operation()
+        self.claimed_by = None
+        self.claim_sender = None
+
+    def _get_uid(self, username):
+        try:
+            return pwd.getpwnam(username).pw_uid
+        except KeyError:
+            return 1000
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="as")
+    def ListEnrolledFingers(self, username):
+        logging.info(f"ListEnrolledFingers for {username}")
+        uid = self._get_uid(username)
+        try:
+            res = subprocess.run([SYNA_TOOL, "list", str(uid)], capture_output=True, text=True, check=True)
+            fingers = [f.strip() for f in res.stdout.strip().splitlines() if f.strip()]
+            logging.info(f"Found enrolled fingers: {fingers}")
+            return fingers
+        except Exception as e:
+            logging.error(f"Error listing fingers: {e}")
+            return []
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
+    def DeleteEnrolledFingers(self, username):
+        logging.info(f"DeleteEnrolledFingers for {username}")
+        uid = self._get_uid(username)
+        subprocess.run([SYNA_TOOL, "delete", str(uid)])
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
+    def DeleteEnrolledFinger(self, finger_name):
+        logging.info(f"DeleteEnrolledFinger {finger_name}")
+        if not self.claimed_by:
+            raise ClaimDevice()
+        uid = self._get_uid(self.claimed_by)
+        subprocess.run([SYNA_TOOL, "delete", str(uid), finger_name])
+
+    def _stop_current_operation(self):
+        self.stop_requested = True
+        if self.active_proc and self.active_proc.poll() is None:
+            logging.info("Stopping active syna-tool process")
+            self.active_proc.terminate()
+            try:
+                self.active_proc.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                self.active_proc.kill()
+        self.active_proc = None
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
+    def EnrollStart(self, finger_name):
+        logging.info(f"EnrollStart for finger: {finger_name}")
+        if not self.claimed_by:
+            raise ClaimDevice()
+
+        self._stop_current_operation()
+        self.stop_requested = False
+        uid = self._get_uid(self.claimed_by)
+
+        def worker():
+            try:
+                proc = subprocess.Popen(
+                    [SYNA_TOOL, "enroll", str(uid), finger_name],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                self.active_proc = proc
+
+                for line in proc.stdout:
+                    if self.stop_requested:
+                        break
+                    line = line.strip()
+                    logging.info(f"syna-tool: {line}")
+                    if line.startswith("PROGRESS:"):
+                        parts = line.split(":")
+                        stage_result = parts[1]
+                        GLib.idle_add(self.EnrollStatus, stage_result, False)
+                    elif line.startswith("DONE:"):
+                        done_result = line.split(":")[1]
+                        success = (done_result == "enroll-completed")
+                        GLib.idle_add(self.EnrollStatus, done_result, True)
+                        break
+
+                proc.wait()
+            except Exception as e:
+                logging.error(f"Enrollment worker error: {e}")
+                GLib.idle_add(self.EnrollStatus, "enroll-failed", True)
+            finally:
+                self.active_proc = None
+
+        self.worker_thread = threading.Thread(target=worker, daemon=True)
+        self.worker_thread.start()
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="")
+    def EnrollStop(self):
+        logging.info("EnrollStop requested")
+        self._stop_current_operation()
+        GLib.idle_add(self.EnrollStatus, "enroll-unknown-error", True)
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
+    def VerifyStart(self, finger_name):
+        logging.info(f"VerifyStart for finger: {finger_name}")
+        if not self.claimed_by:
+            raise ClaimDevice()
+
+        user = self.claimed_by
+        uid = self._get_uid(user)
+
+        fingers = self.ListEnrolledFingers(user)
+        if not fingers:
+            raise NoEnrolledPrints()
+
+        selected_finger = finger_name if finger_name != "any" else fingers[0]
+        self.VerifyFingerSelected(selected_finger)
+
+        self._stop_current_operation()
+        self.stop_requested = False
+
+        def worker():
+            try:
+                proc = subprocess.Popen(
+                    [SYNA_TOOL, "verify", str(uid), finger_name],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                self.active_proc = proc
+
+                matched = False
+                matched_name = selected_finger
+
+                for line in proc.stdout:
+                    if self.stop_requested:
+                        break
+                    line = line.strip()
+                    logging.info(f"syna-tool: {line}")
+                    if line.startswith("MATCH:"):
+                        matched = True
+                        matched_name = line.split(":", 1)[1]
+                        break
+                    elif line == "NO_MATCH":
+                        break
+
+                proc.wait()
+
+                if not self.stop_requested:
+                    if matched:
+                        GLib.idle_add(self.VerifyFingerMatched, matched_name)
+                        GLib.idle_add(self.VerifyStatus, "verify-match", True)
+                    else:
+                        GLib.idle_add(self.VerifyStatus, "verify-no-match", True)
+            except Exception as e:
+                logging.error(f"Verify worker error: {e}")
+                GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
+            finally:
+                self.active_proc = None
+
+        self.worker_thread = threading.Thread(target=worker, daemon=True)
+        self.worker_thread.start()
+
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="")
+    def VerifyStop(self):
+        logging.info("VerifyStop requested")
+        self._stop_current_operation()
+        GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
+
+
+class FprintManager(dbus.service.Object):
+    def __init__(self, bus_name):
+        super().__init__(bus_name, MANAGER_PATH)
+        self.dev = FprintDevice(bus_name)
+
+    @dbus.service.method(dbus_interface=MANAGER_INTERFACE, in_signature="", out_signature="ao")
+    def GetDevices(self):
+        logging.info("Manager.GetDevices called")
+        return [dbus.ObjectPath(DEVICE_PATH)]
+
+    @dbus.service.method(dbus_interface=MANAGER_INTERFACE, in_signature="", out_signature="o")
+    def GetDefaultDevice(self):
+        logging.info("Manager.GetDefaultDevice called")
+        return dbus.ObjectPath(DEVICE_PATH)
+
+
+def main():
+    bus = dbus.SystemBus()
+    bus_name = dbus.service.BusName(BUS_NAME, bus)
+    _mgr = FprintManager(bus_name)
+    logging.info("syna-fprintd started and listening on net.reactivated.Fprint")
+    loop = GLib.MainLoop()
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

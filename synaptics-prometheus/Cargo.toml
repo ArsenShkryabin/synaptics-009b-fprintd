@@ -1,0 +1,58 @@
+[package]
+name = "synaptics-prometheus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "User-space driver for Synaptics Prometheus / Validity fingerprint sensors (family-wide; EOH/MOH and MOC paths). Read-only by default."
+license.workspace = true
+repository = "https://github.com/echtzeit-solutions/synaptics-prometheus"
+keywords = ["fingerprint", "synaptics", "validity", "usb", "biometric"]
+categories = ["hardware-support"]
+
+# Every magic constant / opcode in this crate is annotated `// ghidra: <fn>@<addr>`
+# back to the reverse-engineering in ../docs (STATUS.md, bringup/, protocol/, capture/, qm/).
+
+[features]
+default = ["nusb-backend", "qm"]
+nusb-backend = ["synaptics-transport/nusb-backend"]
+# Destructive command paths (erase/write_flash/partition/enroll/record-delete) are
+# NOT compiled in unless this feature is enabled. The default build physically cannot
+# mutate a sensor's flash or template DB.
+writes = []
+# QM matcher port (research only). Enabled in default builds for now; remove from
+# `default` before any distributed release until patent review clears it.
+# See docs/qm/qm-pipeline.md.
+qm = ["dep:synaptics-prometheus-qm"]
+
+[dependencies]
+# USB transport seam (Transport trait + optional pure-Rust nusb backend), its own crate now.
+synaptics-transport = { path = "../synaptics-transport" }
+
+# Crypto still used directly by the driver (session nonce gen + digests); the AES/CBC/HMAC/TLS
+# primitives moved into the synaptics-crypto crate. Constants verified vs python-validity
+# (docs/bringup/ghidra-crypto.md).
+p256.workspace = true
+rand_core.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+
+thiserror.workspace = true
+log.workspace = true
+bitflags.workspace = true
+# `synfp` probing CLI (src/bin/synfp.rs) — the only clap user in the driver crate.
+clap = { version = "4", features = ["derive"] }
+# Logger for the `synfp` bin + example binaries (src/bin targets can't see dev-dependencies).
+env_logger.workspace = true
+synaptics-biometric = { path = "../synaptics-biometric" }
+synaptics-core = { path = "../synaptics-core" }
+synaptics-crypto = { path = "../synaptics-crypto" }
+synaptics-proto = { path = "../synaptics-proto" }
+synaptics-prometheus-qm = { path = "../synaptics-prometheus-qm", optional = true }
+
+[dev-dependencies]
+serde_json.workspace = true
+hex.workspace = true
+png.workspace = true
+
+[lints]
+workspace = true

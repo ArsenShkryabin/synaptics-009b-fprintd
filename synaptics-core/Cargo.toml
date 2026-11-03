@@ -1,0 +1,14 @@
+[package]
+name = "synaptics-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Foundation types shared across the Synaptics Prometheus driver crates: the error/status model and the bounds-checked little-endian wire cursor/writer. Leaf crate — depends on nothing in the workspace."
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

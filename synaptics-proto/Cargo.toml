@@ -1,0 +1,13 @@
+[package]
+name = "synaptics-proto"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Synaptics Prometheus command protocol: the Opcode / SCS-command-index tables and the sensor response parsers (RomInfo/FlashInfo/SensorStatus/FwInfo/...). Depends only on synaptics-core."
+license.workspace = true
+
+[dependencies]
+synaptics-core = { path = "../synaptics-core" }
+
+[lints]
+workspace = true

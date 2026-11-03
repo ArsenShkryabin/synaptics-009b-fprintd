@@ -1,0 +1,20 @@
+[package]
+name = "synaptics-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "USB transport seam for the Synaptics Prometheus driver: the swappable Transport trait plus the pure-Rust nusb backend (feature-gated). Depends only on synaptics-core."
+license.workspace = true
+
+[features]
+# Pure-Rust nusb USB backend (NusbTransport). Off by default so the trait can be used with a mock.
+nusb-backend = ["dep:nusb", "dep:pollster"]
+
+[dependencies]
+synaptics-core = { path = "../synaptics-core" }
+log.workspace = true
+nusb = { workspace = true, optional = true }
+pollster = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+# Build artifacts
+target/
+Cargo.lock
+
+# Proprietary binaries (downloaded/extracted locally during install)
+windows-driver/
+synaptics-prometheus-qm/data/*.bin
+synaptics-prometheus/data/fw_modules/*.bin
+!synaptics-prometheus/data/fw_modules/MANIFEST.json
+
+# User credentials and templates
+certstore.bin
+*.tmpl
+*.png
+*.bin
+
+# Python
+__pycache__/
+*.pyc

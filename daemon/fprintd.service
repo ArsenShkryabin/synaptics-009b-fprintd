@@ -1,0 +1,17 @@
+[Unit]
+Description=Synaptics Prometheus Fingerprint Daemon (drop-in fprintd replacement)
+Documentation=man:fprintd(1)
+
+[Service]
+Type=dbus
+BusName=net.reactivated.Fprint
+ExecStart=/usr/local/bin/syna-fprintd
+Restart=always
+RestartSec=1
+User=root
+
+# Allow USB device access
+DeviceAllow=char-usb_device rw
+
+[Install]
+WantedBy=multi-user.target
