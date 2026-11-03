@@ -156,11 +156,11 @@ pub enum StaleStatePolicy {
     None,
     /// Send `0x04` (CaptureStop) + drain stale interrupts before first use — clears a stale arm
     /// cheaply, no re-enumerate. The lightweight analogue of the DLL's per-open session reset.
-    #[default]
     Soft,
     /// [`Self::Soft`] plus a `0x05` firmware reboot (`syna_vfm_reboot_sensor_mode0`), after which the
     /// transport is re-opened and TLS re-established (the reboot re-enumerates the device). The
     /// fullest reset — only for manual deep-clearing. Costs a second TLS handshake per open.
+    #[default]
     Hard,
 }
 

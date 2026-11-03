@@ -75,7 +75,7 @@ pub struct RawFrame {
 impl RawFrame {
     /// Whether the arm reported OK (`0x0000` or `0x0412`) and any bytes came back.
     pub fn is_ok(&self) -> bool {
-        matches!(self.arm_status, 0x0000 | 0x0412) && !self.bytes.is_empty()
+        matches!(self.arm_status, 0x0000 | 0x0412 | 0x0450) && !self.bytes.is_empty()
     }
 }
 
@@ -103,7 +103,7 @@ impl FrameCapturer {
         pre_arm: Option<PreArmMode>,
     ) -> Result<RawFrame> {
         let arm_status = io.arm_with_pre(arm_cmd, pre_arm)?;
-        let bytes = if matches!(arm_status, 0x0000 | 0x0412) {
+        let bytes = if matches!(arm_status, 0x0000 | 0x0412 | 0x0450) {
             io.read_frame(self.frame_size())?
         } else {
             Vec::new()
@@ -126,7 +126,7 @@ impl FrameCapturer {
     /// die — verified: byte-correct fold + stop → reset; no stop → accepted).
     pub fn capture_one_no_stop<IO: CaptureIo>(&self, io: &mut IO, arm_cmd: &[u8]) -> Result<RawFrame> {
         let arm_status = io.arm(arm_cmd)?;
-        let bytes = if matches!(arm_status, 0x0000 | 0x0412) {
+        let bytes = if matches!(arm_status, 0x0000 | 0x0412 | 0x0450) {
             io.read_frame(self.frame_size())?
         } else {
             Vec::new()

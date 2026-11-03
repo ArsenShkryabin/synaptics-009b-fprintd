@@ -138,7 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         if let Some(img) = reconstruct_sync_frame(&raw.bytes, layout, params) {
                             let mut sum: u64 = 0;
                             for &p in &img.pixels { sum += p as u64; }
-                            let avg = sum as f64 / img.pixels.len() as f64;
+                            let _avg = sum as f64 / img.pixels.len() as f64;
                             let mut min = 255u8;
                             let mut max = 0u8;
                             for &p in &img.pixels {
@@ -178,6 +178,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let _ = capture.finish();
+            let _ = session.reboot_sensor();
 
             if stage >= 4 || enroll.is_complete() {
                 let blob = enroll.finalize()?;
@@ -310,6 +311,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let _ = capture.finish();
+            let _ = session.reboot_sensor();
+
             if let Some(st) = matched_finger {
                 println!("MATCH:{}", subtype_to_name(st));
                 std::io::stdout().flush()?;
