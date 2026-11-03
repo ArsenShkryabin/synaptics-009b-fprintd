@@ -170,7 +170,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let _ = capture.finish();
-            let _ = session.reboot_sensor();
 
             if stage >= 4 || enroll.is_complete() {
                 let blob = enroll.finalize()?;
@@ -290,7 +289,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             let _ = capture.finish();
-            let _ = session.reboot_sensor();
             if let Some(st) = matched_finger {
                 println!("MATCH:{}", subtype_to_name(st));
                 std::io::stdout().flush()?;
