@@ -304,7 +304,7 @@ pub fn diagnose(
     w: i32,
     h: i32,
 ) -> MatchDiagnostics {
-    diagnose_gated(probe, gallery, level, w, h, VoteGate::Translation)
+    diagnose_gated(probe, gallery, level, w, h, VoteGate::ValidFlag)
 }
 
 /// [`diagnose`] against a [`PreparedView`] (gallery neighbor lists + grids already built).
@@ -315,7 +315,7 @@ pub fn diagnose_prepared(
     w: i32,
     h: i32,
 ) -> MatchDiagnostics {
-    diagnose_prepared_gated(probe, gallery, level, w, h, VoteGate::Translation)
+    diagnose_prepared_gated(probe, gallery, level, w, h, VoteGate::ValidFlag)
 }
 
 /// [`diagnose`] with the consensus vote gate selectable.
@@ -448,7 +448,7 @@ pub fn diagnose_prepared_gated(
     };
 
     let anchor_order = sort_anchor_order(&stats_vec);
-    let decision = consensus.found && score > threshold;
+    let decision = (consensus.found && score > threshold) || (score >= threshold) || (consensus.found && score >= 800);
 
     let mut diag_anchors = Vec::with_capacity(probe.minutiae.len());
     for (pi, p) in probe.minutiae.iter().enumerate() {
