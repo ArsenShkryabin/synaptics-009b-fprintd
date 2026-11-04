@@ -1,0 +1,13 @@
+#!/bin/sh
+# Synaptics Prometheus 06cb:009b sleep hook
+# Releases device before suspend and restarts fprintd upon resume.
+
+case "$1/$2" in
+pre/*)
+	systemctl stop fprintd.service 2>/dev/null || true
+	;;
+post/*)
+	sleep 1
+	systemctl restart fprintd.service 2>/dev/null || true
+	;;
+esac

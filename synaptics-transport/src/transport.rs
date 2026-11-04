@@ -179,25 +179,22 @@ mod nusb_backend {
                 hex_preview(data, 32),
             );
             synaptics_core::pcap_log::maybe_log_wire(EP_CMD_OUT, data);
-            let comp = pollster::block_on(self.interface.bulk_out(EP_CMD_OUT, data.to_vec()));
-            comp.status.map_err(|e| Error::Usb(e.to_string()))?;
+            out_transfer(&self.interface, EP_CMD_OUT, data, 3000)?;
             Ok(())
         }
 
         fn read_cmd(&mut self, max: usize) -> Result<Vec<u8>> {
-            let comp =
-                pollster::block_on(self.interface.bulk_in(EP_CMD_IN, RequestBuffer::new(max)));
-            comp.status.map_err(|e| Error::Usb(e.to_string()))?;
+            let data = in_cmd_transfer(&self.interface, EP_CMD_IN, max, 3000)?;
             trace!(
                 target: USB,
                 "IN  {:?}(0x{:02x}) {}B: {}",
                 Endpoint::CmdIn,
                 Endpoint::CmdIn as u8,
-                comp.data.len(),
-                hex_preview(&comp.data, 32),
+                data.len(),
+                hex_preview(&data, 32),
             );
-            synaptics_core::pcap_log::maybe_log_wire(EP_CMD_IN, &comp.data);
-            Ok(comp.data)
+            synaptics_core::pcap_log::maybe_log_wire(EP_CMD_IN, &data);
+            Ok(data)
         }
 
         fn read_bulk(&mut self, max: usize) -> Result<Vec<u8>> {
@@ -330,6 +327,53 @@ mod nusb_backend {
             Ok(Ok(data)) => Ok(data),
             Ok(Err(e)) => Err(Error::Usb(e)),
             Err(_) => Ok(Vec::new()), // timeout — best-effort empty read
+        }
+    }
+
+    fn out_transfer(
+        interface: &nusb::Interface,
+        ep: u8,
+        data: &[u8],
+        timeout_ms: u64,
+    ) -> Result<()> {
+        let iface = interface.clone();
+        let buf = data.to_vec();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let comp = pollster::block_on(iface.bulk_out(ep, buf));
+            let _ = tx.send(match comp.status {
+                Ok(()) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            });
+        });
+        match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(Error::Usb(e)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(Error::Usb("USB bulk_out command timed out".into())),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(Error::Usb("USB bulk_out helper disconnected".into())),
+        }
+    }
+
+    fn in_cmd_transfer(
+        interface: &nusb::Interface,
+        ep: u8,
+        max: usize,
+        timeout_ms: u64,
+    ) -> Result<Vec<u8>> {
+        let iface = interface.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let comp = pollster::block_on(iface.bulk_in(ep, RequestBuffer::new(max)));
+            let _ = tx.send(match comp.status {
+                Ok(()) => Ok(comp.data),
+                Err(e) => Err(e.to_string()),
+            });
+        });
+        match rx.recv_timeout(std::time::Duration::from_millis(timeout_ms)) {
+            Ok(Ok(data)) => Ok(data),
+            Ok(Err(e)) => Err(Error::Usb(e)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(Error::Usb("USB bulk_in command timed out".into())),
+            Err(mpsc::RecvTimeoutError::Disconnected) => Err(Error::Usb("USB bulk_in helper disconnected".into())),
         }
     }
 }

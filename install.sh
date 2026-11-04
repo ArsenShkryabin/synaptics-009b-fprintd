@@ -133,6 +133,7 @@ echo "=== 6. Installing D-Bus service, udev rules and PAM configs ==="
 install -m 755 daemon/syna-fprintd /usr/local/bin/syna-fprintd
 install -m 644 daemon/fprintd.service /etc/systemd/system/fprintd.service
 install -m 644 daemon/70-synaptics-fingerprint.rules /etc/udev/rules.d/70-synaptics-fingerprint.rules
+install -m 755 daemon/synaptics-009b /usr/lib/systemd/system-sleep/synaptics-009b
 
 if [ -f "daemon/omarchy-lock-fingerprint" ]; then
   install -m 644 daemon/omarchy-lock-fingerprint /etc/pam.d/omarchy-lock-fingerprint

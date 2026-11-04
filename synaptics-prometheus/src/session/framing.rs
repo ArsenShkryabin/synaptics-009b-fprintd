@@ -132,7 +132,14 @@ impl Session<crate::transport::NusbTransport> {
         log::info!("session open: open transport (with reset fallback), stale-state policy = {policy:?}");
         let (t, _) = NusbTransport::open_any(Self::DEFAULT_USB_IDS)
             .or_else(|_| NusbTransport::reset_and_open_any(Self::DEFAULT_USB_IDS))?;
-        let mut session = Self::establish(t, &cert, b"")?;
+        let mut session = match Self::establish(t, &cert, b"") {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("First establish attempt failed ({e:?}); attempting USB port reset fallback...");
+                let (t_fresh, _) = NusbTransport::reset_and_open_any(Self::DEFAULT_USB_IDS)?;
+                Self::establish(t_fresh, &cert, b"")?
+            }
+        };
         session.apply_stale_state_policy(&cert, policy)?;
         Ok(session)
     }

@@ -67,6 +67,22 @@ class FprintDevice(dbus.service.Object):
             "finger-needed": dbus.Boolean(False)
         }
 
+        try:
+            bus_name.get_bus().add_signal_receiver(
+                self._on_name_owner_changed,
+                signal_name="NameOwnerChanged",
+                dbus_interface="org.freedesktop.DBus"
+            )
+        except Exception as e:
+            logging.warning(f"Failed to subscribe to NameOwnerChanged: {e}")
+
+    def _on_name_owner_changed(self, name, old_owner, new_owner):
+        if self.claim_sender and name == self.claim_sender and not new_owner:
+            logging.info(f"Claimant {name} disconnected from bus, auto-releasing")
+            self._stop_current_operation()
+            self.claimed_by = None
+            self.claim_sender = None
+
     # --- org.freedesktop.DBus.Properties ---
     @dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
     def Get(self, interface_name, property_name):
@@ -174,7 +190,12 @@ class FprintDevice(dbus.service.Object):
             try:
                 self.active_proc.wait(timeout=1.0)
             except subprocess.TimeoutExpired:
+                logging.warning("syna-tool did not exit cleanly on SIGTERM, killing...")
                 self.active_proc.kill()
+                try:
+                    self.active_proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    pass
         self.active_proc = None
 
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
@@ -189,13 +210,29 @@ class FprintDevice(dbus.service.Object):
 
         def worker():
             try:
+                if self.stop_requested:
+                    return
                 proc = subprocess.Popen(
                     [SYNA_TOOL, "enroll", str(uid), finger_name],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    bufsize=1
                 )
                 self.active_proc = proc
+                if self.stop_requested:
+                    proc.terminate()
+                    return
+
+                stderr_lines = []
+                def read_stderr():
+                    try:
+                        for eline in proc.stderr:
+                            stderr_lines.append(eline)
+                    except Exception:
+                        pass
+                t_err = threading.Thread(target=read_stderr, daemon=True)
+                t_err.start()
 
                 for line in proc.stdout:
                     if self.stop_requested:
@@ -213,6 +250,10 @@ class FprintDevice(dbus.service.Object):
                         break
 
                 proc.wait()
+                t_err.join(timeout=0.5)
+                err = "".join(stderr_lines).strip()
+                if err:
+                    logging.info(f"syna-tool stderr: {err}")
             except Exception as e:
                 logging.error(f"Enrollment worker error: {e}")
                 GLib.idle_add(self.EnrollStatus, "enroll-failed", True)
@@ -249,13 +290,29 @@ class FprintDevice(dbus.service.Object):
 
         def worker():
             try:
+                if self.stop_requested:
+                    return
                 proc = subprocess.Popen(
                     [SYNA_TOOL, "verify", str(uid), finger_name],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
+                    bufsize=1
                 )
                 self.active_proc = proc
+                if self.stop_requested:
+                    proc.terminate()
+                    return
+
+                stderr_lines = []
+                def read_stderr():
+                    try:
+                        for eline in proc.stderr:
+                            stderr_lines.append(eline)
+                    except Exception:
+                        pass
+                t_err = threading.Thread(target=read_stderr, daemon=True)
+                t_err.start()
 
                 matched = False
                 matched_name = selected_finger
@@ -276,8 +333,8 @@ class FprintDevice(dbus.service.Object):
                         break
 
                 proc.wait()
-
-                err = proc.stderr.read() if proc.stderr else ""
+                t_err.join(timeout=0.5)
+                err = "".join(stderr_lines).strip()
                 if err:
                     logging.info(f"syna-tool stderr: {err}")
 

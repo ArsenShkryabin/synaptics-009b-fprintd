@@ -1,5 +1,6 @@
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use synaptics_biometric::{ConditionedImage, HostBiometricBackend, MatchLevel};
 use synaptics_prometheus::capture::{CaptureOpts, CaptureOutcome, CaptureSession};
@@ -9,6 +10,12 @@ use synaptics_prometheus::reconstruct::reconstruct_sync_frame;
 use synaptics_prometheus::session::{BootstrapOptions, DeviceContext, Session};
 use synaptics_prometheus::template_store::TemplateStore;
 use synaptics_prometheus_qm::QmBackend;
+
+static STOP_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn sig_handler(_: libc::c_int) {
+    STOP_REQUESTED.store(true, Ordering::SeqCst);
+}
 
 const TEMPLATE_DIR: &str = "/var/lib/fprint/synaptics";
 const CERTSTORE_PATH: &str = "/etc/synaptics/certstore.bin";
@@ -47,6 +54,11 @@ fn name_to_subtype(name: &str) -> Option<u8> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    unsafe {
+        libc::signal(libc::SIGTERM, sig_handler as *const () as usize);
+        libc::signal(libc::SIGINT, sig_handler as *const () as usize);
+    }
+
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
         eprintln!("Usage: syna-tool <enroll|verify|list|delete> ...");
@@ -125,9 +137,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut finger_down = false;
 
             for _ in 0..300 {
-                let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || true) {
+                if STOP_REQUESTED.load(Ordering::SeqCst) {
+                    eprintln!("enroll: stop requested via signal");
+                    break;
+                }
+                let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || !STOP_REQUESTED.load(Ordering::SeqCst)) {
                     Ok(o) => o,
                     Err(e) => {
+                        if STOP_REQUESTED.load(Ordering::SeqCst) {
+                            break;
+                        }
                         eprintln!("transient frame error: {e}");
                         std::thread::sleep(Duration::from_millis(50));
                         continue;
@@ -244,12 +263,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::io::stdout().flush()?;
 
             let mut matched_finger = None;
-            let mut retry_throttle = std::time::Instant::now();
 
             for _ in 0..300 {
-                let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || true) {
+                if STOP_REQUESTED.load(Ordering::SeqCst) {
+                    eprintln!("verify: stop requested via signal");
+                    break;
+                }
+                let outcome = match capture.capture(&program, CaptureOpts::stream(sync_frames), || !STOP_REQUESTED.load(Ordering::SeqCst)) {
                     Ok(o) => o,
                     Err(e) => {
+                        if STOP_REQUESTED.load(Ordering::SeqCst) {
+                            break;
+                        }
                         eprintln!("transient frame error: {e}");
                         std::thread::sleep(Duration::from_millis(50));
                         continue;
