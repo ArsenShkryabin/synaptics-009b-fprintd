@@ -46,6 +46,12 @@ cd synaptics-009b-fprintd
 sudo ./install.sh
 ```
 
+#### Arch Linux (PKGBUILD):
+```bash
+cd aur
+makepkg -si
+```
+
 The script will automatically:
 - Download the official driver CAB from Microsoft Update Catalog and extract model weights.
 - Locate or configure the sensor pairing material.
