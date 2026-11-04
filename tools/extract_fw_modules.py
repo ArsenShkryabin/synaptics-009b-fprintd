@@ -88,7 +88,7 @@ def main() -> int:
     args.out.mkdir(parents=True, exist_ok=True)
 
     manifest = {
-        "source_dll": str(args.dll.relative_to(ROOT)),
+        "source_dll": str(args.dll.resolve().relative_to(ROOT.resolve())) if args.dll.resolve().is_relative_to(ROOT.resolve()) else str(args.dll),
         "image_base": f"0x{IMAGE_BASE:x}",
         "record_count": len(rows),
         "modules": [],
