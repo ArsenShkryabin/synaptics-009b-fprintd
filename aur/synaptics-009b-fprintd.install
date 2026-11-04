@@ -1,0 +1,19 @@
+post_install() {
+    echo ":: Synaptics 06cb:009b driver installed successfully."
+    echo ":: A valid pairing certificate is required at /etc/synaptics/certstore.bin"
+    echo ":: If you have a Windows partition, extract it with hivex:"
+    echo "::   See instructions at https://github.com/ArsenShkryabin/synaptics-009b-fprintd"
+    echo "::"
+    echo ":: To start using the driver:"
+    echo "::   sudo systemctl daemon-reload"
+    echo "::   sudo systemctl restart fprintd"
+}
+
+post_upgrade() {
+    post_install
+}
+
+post_remove() {
+    echo ":: Synaptics driver removed. Default fprintd service restored."
+    systemctl daemon-reload 2>/dev/null || true
+}

@@ -1,0 +1,88 @@
+# Maintainer: Arsen Shkryabin <ArsenShkryabin@users.noreply.github.com>
+pkgname=synaptics-009b-fprintd-git
+_pkgname=synaptics-009b-fprintd
+pkgver=0.1.1.r2.gd8e4652
+pkgrel=1
+pkgdesc="Linux driver & drop-in fprintd D-Bus service for Synaptics 06cb:009b (MSI SecurePad)"
+arch=('x86_64')
+url="https://github.com/ArsenShkryabin/synaptics-009b-fprintd"
+license=('GPL-3.0-or-later')
+depends=(
+    'fprintd'
+    'python'
+    'python-gobject'
+    'python-dbus'
+    'libusb'
+)
+makedepends=(
+    'cargo'
+    'rust'
+    'git'
+    '7zip'
+)
+optdepends=(
+    'hivex: automatic pairing certificate extraction from Windows partition'
+)
+provides=('synaptics-009b-fprintd')
+conflicts=('synaptics-009b-fprintd')
+install=synaptics-009b-fprintd.install
+source=(
+    "git+https://github.com/ArsenShkryabin/synaptics-009b-fprintd.git"
+    "syna_driver.cab::https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2022/02/5f113717-0077-472e-898b-776e2d10ba50_f1b188172ca2e951ff68896deaa7af9d3544168e.cab"
+)
+sha256sums=(
+    'SKIP'
+    '35866f5ef98d1cf14a621aee91895dd2be4fb534cb9722243e5b8254373c87c7'
+)
+
+pkgver() {
+    cd "${srcdir}/${_pkgname}"
+    git describe --long --tags --match="v*" 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' || \
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+    cd "${srcdir}/${_pkgname}"
+    mkdir -p windows-driver synaptics-prometheus-qm/data
+    7z e -y "${srcdir}/syna_driver.cab" -o"windows-driver/" synaWudfBioUsb.dll >/dev/null
+    python3 tools/extract_qm_models.py windows-driver/synaWudfBioUsb.dll synaptics-prometheus-qm/data/
+    python3 tools/extract_fw_modules.py --dll windows-driver/synaWudfBioUsb.dll
+}
+
+build() {
+    cd "${srcdir}/${_pkgname}"
+    cargo build --release --locked --bin syna-tool
+}
+
+package() {
+    cd "${srcdir}/${_pkgname}"
+
+    # Binaries
+    install -Dm755 "target/release/syna-tool" "${pkgdir}/usr/bin/syna-tool"
+    install -Dm755 "daemon/syna-fprintd" "${pkgdir}/usr/bin/syna-fprintd"
+
+    # Systemd drop-in override for fprintd.service
+    install -d "${pkgdir}/usr/lib/systemd/system/fprintd.service.d"
+    cat << 'EOF' > "${pkgdir}/usr/lib/systemd/system/fprintd.service.d/synaptics-009b.conf"
+[Service]
+ExecStart=
+ExecStart=/usr/bin/syna-fprintd
+Restart=always
+RestartSec=1
+DeviceAllow=char-usb_device rw
+EOF
+
+    # Udev rules
+    install -Dm644 "daemon/70-synaptics-fingerprint.rules" \
+        "${pkgdir}/usr/lib/udev/rules.d/70-synaptics-fingerprint.rules"
+
+    # Sleep hook
+    install -Dm755 "daemon/synaptics-009b" \
+        "${pkgdir}/usr/lib/systemd/system-sleep/synaptics-009b"
+
+    # PAM configuration for lock screens
+    if [ -f "daemon/omarchy-lock-fingerprint" ]; then
+        install -Dm644 "daemon/omarchy-lock-fingerprint" \
+            "${pkgdir}/etc/pam.d/omarchy-lock-fingerprint"
+    fi
+}
