@@ -167,13 +167,15 @@ syna-fprintd: Signal: VerifyStatus(verify-match, True)
 
 ---
 
-## 🛠 Architecture & AI-Agent Notes
+## 🛠 Project Architecture & Components
 
-- `synaptics-prometheus`: Driver crate handling session establishment, stream arming, and frame capture.
-- `synaptics-prometheus-qm`: Reverse-engineered QuantumMatcher host biometric engine.
+The repository is structured into focused modules:
+
+- `synaptics-prometheus`: Core driver crate handling session establishment, stream arming, and frame capture.
+- `synaptics-prometheus-qm`: Reverse-engineered QuantumMatcher host biometric engine for minutiae matching.
 - `daemon/syna-fprintd`: Python D-Bus daemon bridging `net.reactivated.Fprint` to `syna-tool`.
 - `tools/extract_qm_models.py`: Carves neural network weights (`metviper_weights.bin`, `metviper_mask.bin`, `metviper_lut.bin`) directly from `synaWudfBioUsb.dll`.
-- `tools/extract_fw_modules.py`: Extracts ROM config modules.
+- `tools/extract_fw_modules.py`: Extracts sensor ROM configuration modules.
 
 ---
 
