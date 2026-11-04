@@ -1,6 +1,5 @@
 # Build artifacts
 target/
-Cargo.lock
 
 # Proprietary binaries (downloaded/extracted locally during install)
 windows-driver/
