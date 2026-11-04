@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build & Verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libusb-1.0-0-dev p7zip-full curl python3
+
+      - name: Acquire driver & extract neural models
+        run: |
+          mkdir -p windows-driver synaptics-prometheus-qm/data
+          curl -s -L "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2022/02/5f113717-0077-472e-898b-776e2d10ba50_f1b188172ca2e951ff68896deaa7af9d3544168e.cab" -o /tmp/driver.cab
+          7z e -y /tmp/driver.cab -o"windows-driver/" synaWudfBioUsb.dll
+          python3 tools/extract_qm_models.py windows-driver/synaWudfBioUsb.dll synaptics-prometheus-qm/data/
+          python3 tools/extract_fw_modules.py --dll windows-driver/synaWudfBioUsb.dll
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo Check
+        run: cargo check --release --bin syna-tool
+
+      - name: Cargo Build Release
+        run: cargo build --release --bin syna-tool
