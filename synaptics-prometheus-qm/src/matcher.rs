@@ -448,6 +448,11 @@ pub fn diagnose_prepared_gated(
     };
 
     let anchor_order = sort_anchor_order(&stats_vec);
+    // The score-only clause is load-bearing on 009b today. A live verify on
+    // 2026-11-06 produced score=1733/1200 with consensus=false; the strict
+    // DLL gate (`consensus.found && score > threshold`) would have rejected a
+    // genuine finger. Do not remove this fallback until the consensus port is
+    // fixed and a live match still passes with the strict gate.
     let decision = (consensus.found && score > threshold) || (score >= threshold) || (consensus.found && score >= 800);
 
     let mut diag_anchors = Vec::with_capacity(probe.minutiae.len());

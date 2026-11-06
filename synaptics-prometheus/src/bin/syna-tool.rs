@@ -310,8 +310,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         for (st, blob) in &templates {
                                             match backend.verify(&probe, blob, MatchLevel::Level1) {
                                                 Ok(res) => {
-                                                    eprintln!("VERIFY: diff={diff} anchors={} score={}/{} matched={}",
-                                                        res.anchor_count, res.score, res.threshold, res.matched);
+                                                    // `strict` is the DLL-faithful decision
+                                                    // (geometric consensus AND score above the
+                                                    // level threshold). The keep-going decision
+                                                    // below stays unchanged until a real finger
+                                                    // confirms that strict still accepts.
+                                                    let strict =
+                                                        res.consensus_ok && res.score > res.threshold;
+                                                    eprintln!(
+                                                        "VERIFY: diff={diff} anchors={} score={}/{} \
+                                                         consensus={} strict={} matched={}",
+                                                        res.anchor_count,
+                                                        res.score,
+                                                        res.threshold,
+                                                        res.consensus_ok,
+                                                        strict,
+                                                        res.matched
+                                                    );
                                                     if res.matched {
                                                         matched_finger = Some(*st);
                                                         break;
