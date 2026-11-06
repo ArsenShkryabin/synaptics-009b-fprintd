@@ -24,7 +24,7 @@ pub use crate::capture_prog::CAL_STEP6_SYNC_FRAMES as DARK_FRAME_SYNC_FRAMES;
 pub use crate::capture_prog::CAL_STEP6_SYNC_FRAMES as STEP6_SYNC_FRAMES;
 
 fn arm_status_ok(status: u16) -> bool {
-    matches!(status, 0x0000 | 0x0412 | 0x0450)
+    matches!(status, 0x0000 | 0x0412)
 }
 
 /// One frames-sync cal arm: [`FrameCapturer::capture_one`] (stop → arm → EP-0x82 read).
