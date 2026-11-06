@@ -54,7 +54,10 @@ fn name_to_subtype(name: &str) -> Option<u8> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Templates are biometric data. Even when `syna-tool` is run directly
+    // (not through the root daemon), never create them world-readable.
     unsafe {
+        libc::umask(0o077);
         libc::signal(libc::SIGTERM, sig_handler as *const () as usize);
         libc::signal(libc::SIGINT, sig_handler as *const () as usize);
     }

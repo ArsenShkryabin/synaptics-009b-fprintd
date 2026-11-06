@@ -38,7 +38,9 @@ if [ -n "$MISSING_PKGS" ]; then
   fi
 fi
 
-mkdir -p windows-driver synaptics-prometheus-qm/data /etc/synaptics /var/lib/fprint/synaptics
+mkdir -p windows-driver synaptics-prometheus-qm/data
+install -d -m 700 /etc/synaptics
+install -d -m 700 /var/lib/fprint/synaptics
 
 echo "=== 2. Acquiring Synaptics driver DLL ==="
 if [ ! -f "windows-driver/synaWudfBioUsb.dll" ]; then
@@ -122,8 +124,21 @@ fi
 
 if [ -f "/etc/synaptics/certstore.bin" ]; then
   chmod 600 /etc/synaptics/certstore.bin
+  chmod 700 /etc/synaptics
   echo "Pairing certstore installed at /etc/synaptics/certstore.bin"
+else
+  echo "ERROR: no pairing certstore found." >&2
+  echo "  The 009b sensor needs the host pairing material created by Windows Hello." >&2
+  echo "  Either:" >&2
+  echo "    1) keep a dual-boot Windows install with Windows Hello set up and re-run this installer, or" >&2
+  echo "    2) provide a certstore.bin from this exact sensor (same ECDH key)." >&2
+  echo "  A Windows-free fresh-pairing tool is not implemented yet." >&2
+  exit 1
 fi
+
+# Existing template stores may predate the private-permission rule.
+find /var/lib/fprint/synaptics -type d -exec chmod 700 {} + 2>/dev/null || true
+find /var/lib/fprint/synaptics -type f -exec chmod 600 {} + 2>/dev/null || true
 
 echo "=== 5. Compiling syna-tool (release build) ==="
 cargo build --release --bin syna-tool

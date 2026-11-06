@@ -1,5 +1,13 @@
 post_install() {
     echo ":: Synaptics 06cb:009b driver installed successfully."
+
+    # Pairing + templates are private: the host key is sealed under a public
+    # hardcoded GWK and templates are biometric data.
+    install -d -m 700 /etc/synaptics /var/lib/fprint/synaptics 2>/dev/null || true
+    [ -f /etc/synaptics/certstore.bin ] && chmod 600 /etc/synaptics/certstore.bin
+    find /var/lib/fprint/synaptics -type d -exec chmod 700 {} + 2>/dev/null || true
+    find /var/lib/fprint/synaptics -type f -exec chmod 600 {} + 2>/dev/null || true
+
     echo ":: A valid pairing certificate is required at /etc/synaptics/certstore.bin"
     echo ":: If you have a Windows partition, extract it with hivex:"
     echo "::   See instructions at https://github.com/ArsenShkryabin/synaptics-009b-fprintd"
