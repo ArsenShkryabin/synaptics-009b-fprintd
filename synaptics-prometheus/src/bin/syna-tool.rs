@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: syna-tool <enroll|verify|list|delete> ...");
+        eprintln!("Usage: syna-tool <enroll|verify|list|delete|inspect> ...");
         std::process::exit(1);
     }
 
@@ -81,6 +81,98 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(entries) = store.list_fingers(uid) {
                 for st in entries {
                     println!("{}", subtype_to_name(st));
+                }
+            }
+        }
+        "inspect" => {
+            if args.len() < 3 {
+                eprintln!("Usage: syna-tool inspect <uid> [finger_name]");
+                std::process::exit(1);
+            }
+            let uid: u32 = args[2].parse()?;
+            let filter_st = args.get(3).and_then(|s| name_to_subtype(s));
+            let entries = store.list_fingers(uid)?;
+            for st in entries {
+                if let Some(want) = filter_st
+                    && want != st
+                {
+                    continue;
+                }
+                let Some(stored) = store.load(uid, st)? else {
+                    continue;
+                };
+                let enrolled = synaptics_prometheus_qm::EnrolledTemplate::from_blob(&stored.blob)
+                    .map_err(|e| format!("invalid enrolled template: {e:?}"))?;
+                println!(
+                    "finger={} (subtype=0x{st:02x}) bytes={} views={}",
+                    subtype_to_name(st),
+                    stored.blob.len(),
+                    enrolled.views.len()
+                );
+                for (vi, v) in enrolled.views.iter().enumerate() {
+                    let mut shifted = v.clone();
+                    for (mi, m) in shifted.minutiae.iter_mut().enumerate() {
+                        m.x = m.x.saturating_add(3);
+                        m.y = m.y.saturating_add(2);
+                        m.descriptor[mi % 8] ^= 0x07;
+                        m.descriptor[(mi + 3) % 8] ^= 0x13;
+                    }
+                    let ds = synaptics_prometheus_qm::diagnose(
+                        &shifted,
+                        v,
+                        synaptics_prometheus_qm::types::MatchLevel::Level1,
+                        synaptics_prometheus_qm::matcher::DEFAULT_IMAGE_W,
+                        synaptics_prometheus_qm::matcher::DEFAULT_IMAGE_H,
+                    );
+                    println!(
+                        "  view[{vi}]: minutiae={:3} split={:2} field_0c=0x{:04x} shifted(+3,+2): anchors={:3} score={:4}/{} cons=({},occ={},peak={})",
+                        v.minutiae.len(),
+                        v.split,
+                        v.field_0c,
+                        ds.anchor_count,
+                        ds.score,
+                        ds.threshold,
+                        ds.consensus.found,
+                        ds.consensus.occupied,
+                        ds.consensus.peak,
+                    );
+                }
+                for (i, a) in enrolled.views.iter().enumerate() {
+                    for (j, b) in enrolled.views.iter().enumerate() {
+                        if i == j {
+                            continue;
+                        }
+                        let d = synaptics_prometheus_qm::diagnose(
+                            a,
+                            b,
+                            synaptics_prometheus_qm::types::MatchLevel::Level1,
+                            synaptics_prometheus_qm::matcher::DEFAULT_IMAGE_W,
+                            synaptics_prometheus_qm::matcher::DEFAULT_IMAGE_H,
+                        );
+                        let xforms: Vec<_> = d
+                            .anchors
+                            .iter()
+                            .filter(|an| an.is_anchor)
+                            .map(|an| an.transform.to_xform_record(1))
+                            .collect();
+                        let ungated = synaptics_prometheus_qm::consensus::geometric_consensus_pick(
+                            &xforms,
+                            synaptics_prometheus_qm::matcher::DEFAULT_IMAGE_W,
+                            synaptics_prometheus_qm::matcher::DEFAULT_IMAGE_H,
+                        );
+                        println!(
+                            "  pair {i}->{j}: anchors={:2} score={:4}/{} gated_cons=({},occ={},peak={}) ungated_cons=({},occ={},peak={})",
+                            d.anchor_count,
+                            d.score,
+                            d.threshold,
+                            d.consensus.found,
+                            d.consensus.occupied,
+                            d.consensus.peak,
+                            ungated.found,
+                            ungated.occupied,
+                            ungated.peak,
+                        );
+                    }
                 }
             }
         }
