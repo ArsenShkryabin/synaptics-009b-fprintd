@@ -98,13 +98,17 @@ Disassembly of `synaWudfBioUsb.dll` revealed two bugs in the QM matcher port:
    On the real enrolled `07.tmpl`, fixing both raised shifted-view self-scores (`view[0]: 637 → 3000`,
    `view[1]: 0 → 1743`) and cross-view genuine scores (`view[1]→view[3]: 0 → 2328`,
    `view[3]→view[0]: 0 → 2694` with `consensus=true`).
-
-Note: the `score >= threshold` fallback in `matcher.rs` is still retained until geometric-consensus
-`pick_transform`/`finalize` (`0x18000c460`/`0x18000bd40`) are ported in full.
+3. **Geometric consensus leave-one-out transform picker (`0x18000c0f0`, `0x18000c1c0`, `0x18000c430`,
+   `0x18000c460`) and exact DLL decision rule (`0x1801015a2`):**
+   - Ported `vote_grid_add_reference`, `apply_transform_vote`, `accumulate_votes`, and
+     `consensus_pick_transform_gated` from `synaWudfBioUsb.dll` into `consensus.rs`.
+   - Replaced the ad-hoc `|| (consensus.found && score >= 800)` bypass in `matcher.rs` with the
+     DLL's exact `score > threshold` decision rule (`syna_qm_match_core@0x180100620` at `0x1801015a2`,
+     where `consensus.found` sets `result->strong_flag` `+0x0c`).
 
 ## 4. Test status
 
-- `cargo test --release` (entire workspace: unit + integration + examples) — **434 passed, 0 failed**.
+- `cargo test --release` (entire workspace: unit + integration + examples) — **435 passed, 0 failed**.
 - `python3 -m py_compile daemon/syna-fprintd` and
   `bash -n daemon/test-auth-bypass.sh` pass.
 
@@ -112,8 +116,8 @@ Note: the `score >= threshold` fallback in `matcher.rs` is still retained until 
 
 | Item | SHA-256 |
 |---|---|
-| `/usr/local/bin/syna-fprintd` | `390e974f7424ec28c54cce8bd2dc05af41c678dcceb54e2405ea9fe2574da510` |
-| `/usr/local/bin/syna-tool` | `bdcdfda19b388b499a802f31532c9b79b9ea294cc670b936697f58a35bdce2a5` |
+| `/usr/local/bin/syna-fprintd` | `00c42fb3abc1c2e35bdfb2c1314071c874c308022ae7713697016d3e6ae78bab` |
+| `/usr/local/bin/syna-tool` | `a4a7f39b068b4e4db4aba2f8fe1e220160dc487791f1f5ed69c3f7acd64033c6` |
 | `/etc/synaptics/certstore.bin` | unchanged `93dfe0f1…` |
 | `/var/lib/fprint/synaptics/1000/07.tmpl` | unchanged `d091675b…` |
 
