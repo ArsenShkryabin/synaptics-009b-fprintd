@@ -70,6 +70,7 @@ class FprintDevice(dbus.service.Object):
         self.active_proc = None
         self.worker_thread = None
         self.stop_requested = False
+        self.operation_done = True
 
         self._properties = {
             "name": dbus.String("Synaptics Prometheus (06cb:009b)"),
@@ -290,6 +291,7 @@ class FprintDevice(dbus.service.Object):
 
         self._stop_current_operation()
         self.stop_requested = False
+        self.operation_done = False
 
         def worker():
             try:
@@ -317,6 +319,7 @@ class FprintDevice(dbus.service.Object):
                 t_err = threading.Thread(target=read_stderr, daemon=True)
                 t_err.start()
 
+                done_result = None
                 for line in proc.stdout:
                     if self.stop_requested:
                         break
@@ -328,8 +331,6 @@ class FprintDevice(dbus.service.Object):
                         GLib.idle_add(self.EnrollStatus, stage_result, False)
                     elif line.startswith("DONE:"):
                         done_result = line.split(":")[1]
-                        success = (done_result == "enroll-completed")
-                        GLib.idle_add(self.EnrollStatus, done_result, True)
                         break
 
                 proc.wait()
@@ -337,9 +338,19 @@ class FprintDevice(dbus.service.Object):
                 err = "".join(stderr_lines).strip()
                 if err:
                     logging.info(f"syna-tool stderr: {err}")
+
+                if not self.stop_requested and not self.operation_done:
+                    self.operation_done = True
+                    GLib.idle_add(
+                        self.EnrollStatus,
+                        done_result or "enroll-failed",
+                        True,
+                    )
             except Exception as e:
                 logging.error(f"Enrollment worker error: {e}")
-                GLib.idle_add(self.EnrollStatus, "enroll-failed", True)
+                if not self.operation_done:
+                    self.operation_done = True
+                    GLib.idle_add(self.EnrollStatus, "enroll-failed", True)
             finally:
                 self.active_proc = None
 
@@ -351,8 +362,11 @@ class FprintDevice(dbus.service.Object):
     def EnrollStop(self, sender=None):
         logging.info(f"EnrollStop requested (sender {sender})")
         self._require_claimant_for_stop(sender)
+        was_done = self.operation_done
+        self.operation_done = True
         self._stop_current_operation()
-        GLib.idle_add(self.EnrollStatus, "enroll-unknown-error", True)
+        if not was_done:
+            GLib.idle_add(self.EnrollStatus, "enroll-unknown-error", True)
 
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
                          sender_keyword="sender")
@@ -371,6 +385,7 @@ class FprintDevice(dbus.service.Object):
 
         self._stop_current_operation()
         self.stop_requested = False
+        self.operation_done = False
 
         def worker():
             try:
@@ -422,7 +437,8 @@ class FprintDevice(dbus.service.Object):
                 if err:
                     logging.info(f"syna-tool stderr: {err}")
 
-                if not self.stop_requested:
+                if not self.stop_requested and not self.operation_done:
+                    self.operation_done = True
                     if matched:
                         GLib.idle_add(self.VerifyFingerMatched, matched_name)
                         GLib.idle_add(self.VerifyStatus, "verify-match", True)
@@ -430,7 +446,9 @@ class FprintDevice(dbus.service.Object):
                         GLib.idle_add(self.VerifyStatus, "verify-no-match", True)
             except Exception as e:
                 logging.error(f"Verify worker error: {e}")
-                GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
+                if not self.operation_done:
+                    self.operation_done = True
+                    GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
             finally:
                 self.active_proc = None
 
@@ -442,8 +460,11 @@ class FprintDevice(dbus.service.Object):
     def VerifyStop(self, sender=None):
         logging.info(f"VerifyStop requested (sender {sender})")
         self._require_claimant_for_stop(sender)
+        was_done = self.operation_done
+        self.operation_done = True
         self._stop_current_operation()
-        GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
+        if not was_done:
+            GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
 
 
 class FprintManager(dbus.service.Object):

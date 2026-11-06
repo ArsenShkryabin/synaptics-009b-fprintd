@@ -45,6 +45,7 @@ prepare() {
     cd "${srcdir}/${_pkgname}"
     mkdir -p windows-driver synaptics-prometheus-qm/data
     7z e -y "${srcdir}/syna_driver.cab" -o"windows-driver/" synaWudfBioUsb.dll >/dev/null
+    echo "ab56871c7bf83841719b3ae90e8bfdc646bf0f0fd01e49f1b83bdded17d3bf7b  windows-driver/synaWudfBioUsb.dll" | sha256sum -c -
     python3 tools/extract_qm_models.py windows-driver/synaWudfBioUsb.dll synaptics-prometheus-qm/data/
     python3 tools/extract_fw_modules.py --dll windows-driver/synaWudfBioUsb.dll
 }
