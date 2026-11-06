@@ -4,7 +4,9 @@ post_install() {
     # Pairing + templates are private: the host key is sealed under a public
     # hardcoded GWK and templates are biometric data.
     install -d -m 700 /etc/synaptics /var/lib/fprint/synaptics 2>/dev/null || true
-    [ -f /etc/synaptics/certstore.bin ] && chmod 600 /etc/synaptics/certstore.bin
+    if [ -f /etc/synaptics/certstore.bin ]; then
+        chmod 600 /etc/synaptics/certstore.bin
+    fi
     find /var/lib/fprint/synaptics -type d -exec chmod 700 {} + 2>/dev/null || true
     find /var/lib/fprint/synaptics -type f -exec chmod 600 {} + 2>/dev/null || true
 
