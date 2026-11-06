@@ -106,9 +106,12 @@ a permission fix.
 | Item | SHA-256 |
 |---|---|
 | `/usr/local/bin/syna-fprintd` | `390e974f7424ec28c54cce8bd2dc05af41c678dcceb54e2405ea9fe2574da510` |
-| `/usr/local/bin/syna-tool` (with diagnostics) | `47a05fc96d4a79edc0d3b596045d2a4b13607e67afecbd0c038f6542faf63498` |
+| `/usr/local/bin/syna-tool` (with diagnostics) | `3d738a77d9adc30744f6ecfeb3f99dc5ee9282ddfeeecc97cbeca66c994302da` |
 | `/etc/synaptics/certstore.bin` | unchanged `93dfe0f1…` |
 | `/var/lib/fprint/synaptics/1000/07.tmpl` | unchanged `d091675b…` |
+
+The live match above was captured with the diagnostic build of this same
+source; the final rebuild differs only by a source comment (no code change).
 
 The known-good binaries are also stored, root-only, in
 `/root/syna-known-good-2026-11-06/bin/`.
