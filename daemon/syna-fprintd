@@ -74,7 +74,7 @@ class FprintDevice(dbus.service.Object):
 
         self._properties = {
             "name": dbus.String("Synaptics Prometheus (06cb:009b)"),
-            "num-enroll-stages": dbus.Int32(5),
+            "num-enroll-stages": dbus.Int32(8),
             "scan-type": dbus.String("press"),
             "finger-present": dbus.Boolean(False),
             "finger-needed": dbus.Boolean(False)

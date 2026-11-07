@@ -265,9 +265,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::io::stdout().flush()?;
 
             let mut stage = 0;
+            let mut ready_for_touch = false;
             let mut finger_down = false;
 
-            for _ in 0..300 {
+            for _ in 0..600 {
                 if STOP_REQUESTED.load(Ordering::SeqCst) {
                     eprintln!("enroll: stop requested via signal");
                     break;
@@ -286,22 +287,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 match outcome {
                     CaptureOutcome::Stream(raw) => {
                         if let Some(img) = reconstruct_sync_frame(&raw.bytes, layout, params) {
-                            let mut sum: u64 = 0;
-                            for &p in &img.pixels { sum += p as u64; }
-                            let _avg = sum as f64 / img.pixels.len() as f64;
-                            let mut min = 255u8;
-                            let mut max = 0u8;
-                            for &p in &img.pixels {
-                                if p < min { min = p; }
-                                if p > max { max = p; }
-                            }
-                            let diff = max as i32 - min as i32;
-                            let touching = diff > 130;
+                            let px = &img.pixels;
+                            let sum: u64 = px.iter().map(|&p| p as u64).sum();
+                            let mean = sum as f64 / px.len() as f64;
+                            let var = px.iter().map(|&p| (p as f64 - mean).powi(2)).sum::<f64>() / px.len() as f64;
 
-                            if touching && !finger_down {
+                            // Empirical thresholds from live telemetry:
+                            // Startup settling: var < 600
+                            // Sensor empty/idle noise: 1200 <= var <= 1450
+                            // Finger touching sensor: var >= 1800
+                            if !ready_for_touch {
+                                if (1100.0..=1450.0).contains(&var) {
+                                    ready_for_touch = true;
+                                }
+                                continue;
+                            }
+
+                            if var >= 1800.0 && !finger_down {
                                 finger_down = true;
                                 stage += 1;
-                                let cond = synaptics_prometheus::reconstruct::condition_onchip(&img.pixels, None, img.width, img.height);
+
+                                let cond = synaptics_prometheus::reconstruct::condition_onchip(px, None, img.width, img.height);
                                 let cond_img = ConditionedImage {
                                     pixels: &cond.pixels,
                                     width: img.width as u16,
@@ -312,10 +318,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("PROGRESS:enroll-stage-passed:{}", prog.percent);
                                 std::io::stdout().flush()?;
 
-                                if stage >= 6 || enroll.is_complete() {
+                                if stage >= 8 || enroll.is_complete() {
                                     break;
                                 }
-                            } else if !touching && finger_down {
+                            } else if var <= 1450.0 && finger_down {
                                 finger_down = false;
                                 println!("PROGRESS:enroll-remove-and-retry:0");
                                 std::io::stdout().flush()?;
@@ -324,13 +330,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     _ => {}
                 }
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(Duration::from_millis(80));
             }
 
             let _ = capture.finish();
             let _ = session.reboot_sensor();
 
-            if stage >= 4 || enroll.is_complete() {
+            if stage >= 5 || enroll.is_complete() {
                 let blob = enroll.finalize()?;
                 store.store(uid, subtype, &blob)?;
                 println!("DONE:enroll-completed");
