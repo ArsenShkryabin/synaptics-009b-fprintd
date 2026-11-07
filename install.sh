@@ -25,13 +25,13 @@ if [ -n "$MISSING_PKGS" ]; then
   echo "Missing required tools: $MISSING_PKGS"
   if command -v pacman >/dev/null 2>&1; then
     echo "Installing via pacman..."
-    pacman -S --needed --noconfirm 7zip curl python rust
+    pacman -S --needed --noconfirm 7zip curl python rust python-pyqt6
   elif command -v apt >/dev/null 2>&1; then
     echo "Installing via apt..."
-    apt-get update && apt-get install -y p7zip-full curl python3 python3-pip cargo rustc libusb-1.0-0-dev
+    apt-get update && apt-get install -y p7zip-full curl python3 python3-pip cargo rustc libusb-1.0-0-dev python3-pyqt6
   elif command -v dnf >/dev/null 2>&1; then
     echo "Installing via dnf..."
-    dnf install -y p7zip curl python3 cargo rust libusbx-devel
+    dnf install -y p7zip curl python3 cargo rust libusbx-devel python3-pyqt6
   else
     echo "Please install missing packages manually and re-run install.sh."
     exit 1

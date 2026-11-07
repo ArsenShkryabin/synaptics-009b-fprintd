@@ -15,6 +15,7 @@ pkgbase = synaptics-009b-fprintd-git
 	depends = python-gobject
 	depends = python-dbus
 	depends = libusb
+	optdepends = python-pyqt6: GUI-утилита регистрации отпечатков пальцев (syna-enroll-gui)
 	provides = synaptics-009b-fprintd
 	conflicts = synaptics-009b-fprintd
 	source = git+https://github.com/ArsenShkryabin/synaptics-009b-fprintd.git
