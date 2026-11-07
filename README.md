@@ -1,7 +1,7 @@
 # synaptics-009b-fprintd
 
 [![CI](https://github.com/ArsenShkryabin/synaptics-009b-fprintd/actions/workflows/ci.yml/badge.svg)](https://github.com/ArsenShkryabin/synaptics-009b-fprintd/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/ArsenShkryabin/synaptics-009b-fprintd)](https://github.com/ArsenShkryabin/synaptics-009b-fprintd/releases)
+[![Release: v0.2.0](https://img.shields.io/badge/release-v0.2.0-blue.svg)](https://github.com/ArsenShkryabin/synaptics-009b-fprintd/releases/tag/v0.2.0)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange.svg)](https://www.rust-lang.org/)
 [![Arch Linux AUR](https://img.shields.io/badge/AUR-synaptics--009b--fprintd--git-1793d1.svg)](aur/PKGBUILD)
