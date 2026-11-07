@@ -44,6 +44,7 @@ This project provides an autonomous, production-ready Linux driver stack:
 - **100% Linux Native Pairing:** Pairs directly with the sensor over USB (`syna-tool pair`), generating the required 4096-byte certificate store with zero dependencies on Windows or Windows Hello.
 - **Non-Destructive Dual-Boot:** Preserves existing pairing data, so Windows Hello continues to work without conflict in dual-boot setups.
 - **Security-First Authorization:** Enforces strict caller UID validation over D-Bus; normal users can only access their own biometric templates while `root` retains system authorization for `sudo` and lock screens. Templates and pairing keys are stored with private `0600`/`0700` permissions.
+- **Desktop & GUI Ready:** Full compatibility with GNOME Control Center and KDE System Settings, including modern `DeleteEnrolledFingers2()` support, clean non-intrusive cancellation without spurious error toasts, `scan-type: "press"` UI animations, and standard D-Bus introspection properties.
 
 ---
 
@@ -65,10 +66,10 @@ sudo ./install.sh
 ```
 
 The installer will:
-1. Download the official 1.2 MB driver CAB from Microsoft Update Catalog and extract neural model weights (`metviper_*.bin`).
-2. Locate or configure the sensor pairing material.
+1. Download the official 1.2 MB driver CAB from Microsoft Update Catalog and extract neural model weights (`metviper_*.bin`) and all 75 firmware modules.
+2. Pair directly with the sensor over USB (`syna-tool pair`) to generate `/etc/synaptics/certstore.bin` if not already present.
 3. Compile `syna-tool` in release mode.
-4. Install `syna-fprintd`, systemd service drop-in, udev rules, sleep hook, and PAM configurations.
+4. Install `syna-fprintd`, firmware assets to `/usr/share/synaptics/`, systemd service drop-in, udev rules, sleep hook, and PAM configurations.
 5. Enable and start the service.
 
 ---
@@ -100,6 +101,12 @@ Verify result: verify-match (done)
 ```bash
 fprintd-list $USER
 ```
+
+### 4. Inspect stored biometric templates (offline diagnostic):
+```bash
+syna-tool inspect $(id -u)
+```
+Displays minutiae counts, quality ratings, and sub-views stored in your template files without opening the sensor.
 
 ---
 
