@@ -15,24 +15,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 echo "=== 1. Checking dependencies ==="
-MISSING_PKGS=""
-command -v curl >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS curl"
-command -v 7z >/dev/null 2>&1 || command -v 7za >/dev/null 2>&1 || command -v cabextract >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS 7zip"
-command -v python3 >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS python"
-command -v cargo >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS rust/cargo"
-
-if [ -n "$MISSING_PKGS" ]; then
-  echo "Missing required tools: $MISSING_PKGS"
-  if command -v pacman >/dev/null 2>&1; then
-    echo "Installing via pacman..."
-    pacman -S --needed --noconfirm 7zip curl python rust python-pyqt6
-  elif command -v apt >/dev/null 2>&1; then
-    echo "Installing via apt..."
-    apt-get update && apt-get install -y p7zip-full curl python3 python3-pip cargo rustc libusb-1.0-0-dev python3-pyqt6
-  elif command -v dnf >/dev/null 2>&1; then
-    echo "Installing via dnf..."
-    dnf install -y p7zip curl python3 cargo rust libusbx-devel python3-pyqt6
-  else
+if command -v pacman >/dev/null 2>&1; then
+  echo "Detected Arch-based system. Installing required packages via pacman..."
+  pacman -S --needed --noconfirm 7zip curl python rust libusb fprintd python-dbus python-gobject python-pyqt6
+elif command -v apt >/dev/null 2>&1; then
+  echo "Detected Debian/Ubuntu system. Installing required packages via apt..."
+  apt-get update && apt-get install -y p7zip-full curl python3 python3-pip cargo rustc libusb-1.0-0-dev fprintd libpam-fprintd python3-dbus python3-gi python3-pyqt6
+elif command -v dnf >/dev/null 2>&1; then
+  echo "Detected Fedora/RHEL system. Installing required packages via dnf..."
+  dnf install -y p7zip curl python3 cargo rust libusbx-devel fprintd pam_fprintd python3-dbus python3-gobject python3-pyqt6
+else
+  MISSING_PKGS=""
+  command -v curl >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS curl"
+  command -v 7z >/dev/null 2>&1 || command -v 7za >/dev/null 2>&1 || command -v cabextract >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS 7zip"
+  command -v python3 >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS python"
+  command -v cargo >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS rust/cargo"
+  command -v fprintd-verify >/dev/null 2>&1 || MISSING_PKGS="$MISSING_PKGS fprintd"
+  if [ -n "$MISSING_PKGS" ]; then
+    echo "Missing required tools: $MISSING_PKGS"
     echo "Please install missing packages manually and re-run install.sh."
     exit 1
   fi

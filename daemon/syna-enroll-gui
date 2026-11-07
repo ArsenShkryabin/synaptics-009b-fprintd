@@ -18,16 +18,26 @@ import select
 import signal
 import subprocess
 
-from PyQt6.QtCore import (
-    Qt, QThread, pyqtSignal, QTimer, QRectF, QPointF
-)
-from PyQt6.QtGui import (
-    QColor, QPainter, QPainterPath, QPen, QBrush, QFont
-)
-from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QFrame
-)
+try:
+    from PyQt6.QtCore import (
+        Qt, QThread, pyqtSignal, QTimer, QRectF, QPointF
+    )
+    from PyQt6.QtGui import (
+        QColor, QPainter, QPainterPath, QPen, QBrush, QFont
+    )
+    from PyQt6.QtWidgets import (
+        QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+        QPushButton, QFrame
+    )
+except ImportError:
+    print("\n[!] Ошибка: Для запуска графического интерфейса необходим пакет PyQt6.")
+    print("    Установите его командой:")
+    print("      • Arch Linux:   sudo pacman -S python-pyqt6")
+    print("      • Ubuntu/Debian: sudo apt install python3-pyqt6")
+    print("      • Fedora:       sudo dnf install python3-pyqt6")
+    print("\n[i] Вы также можете зарегистрировать палец прямо в консоли:")
+    print("      fprintd-enroll -f left-index-finger\n")
+    sys.exit(1)
 
 # Omarchy Tokyo Night Palette
 COLOR_BG = QColor("#1a1b26")
