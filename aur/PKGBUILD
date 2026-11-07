@@ -1,7 +1,7 @@
 # Maintainer: Arsen Shkryabin <ArsenShkryabin@users.noreply.github.com>
 pkgname=synaptics-009b-fprintd-git
 _pkgname=synaptics-009b-fprintd
-pkgver=0.1.1.r2.gd8e4652
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Linux driver & drop-in fprintd D-Bus service for Synaptics 06cb:009b (MSI SecurePad)"
 arch=('x86_64')

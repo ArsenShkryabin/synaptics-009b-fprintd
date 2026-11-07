@@ -998,14 +998,14 @@ dependencies = [
 
 [[package]]
 name = "synaptics-biometric"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "synaptics-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "thiserror",
@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "synaptics-crypto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aes",
  "cbc",
@@ -1026,7 +1026,7 @@ dependencies = [
 
 [[package]]
 name = "synaptics-prometheus"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "bitflags 2.13.2",
  "clap",
@@ -1051,7 +1051,7 @@ dependencies = [
 
 [[package]]
 name = "synaptics-prometheus-qm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "sha2",
  "synaptics-biometric",
@@ -1060,14 +1060,14 @@ dependencies = [
 
 [[package]]
 name = "synaptics-proto"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "synaptics-core",
 ]
 
 [[package]]
 name = "synaptics-transport"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "log",
  "nusb",
