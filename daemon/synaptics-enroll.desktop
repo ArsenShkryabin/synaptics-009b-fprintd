@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Сканер отпечатков
+GenericName=Настройка сканера отпечатков пальцев
+Comment=Быстрая и наглядная регистрация отпечатков пальцев (MSI SecurePad)
+Exec=/usr/local/bin/syna-enroll-gui
+Icon=fingerprint
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;Security;
+Keywords=fingerprint;fprint;biometrics;msi;synaptics;отпечаток;палец;
+StartupWMClass=synaptics-enroll

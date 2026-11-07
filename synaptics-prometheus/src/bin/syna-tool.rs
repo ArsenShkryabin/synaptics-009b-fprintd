@@ -318,7 +318,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 println!("PROGRESS:enroll-stage-passed:{}", prog.percent);
                                 std::io::stdout().flush()?;
 
-                                if stage >= 8 || enroll.is_complete() {
+                                if stage >= 10 || enroll.is_complete() {
                                     break;
                                 }
                             } else if var <= 1450.0 && finger_down {
@@ -336,7 +336,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = capture.finish();
             let _ = session.reboot_sensor();
 
-            if stage >= 5 || enroll.is_complete() {
+            if stage >= 6 || enroll.is_complete() {
                 let blob = enroll.finalize()?;
                 store.store(uid, subtype, &blob)?;
                 println!("DONE:enroll-completed");

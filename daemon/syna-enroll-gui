@@ -1,0 +1,534 @@
+#!/usr/bin/env python3
+"""
+syna-enroll-gui — Minimalist Fingerprint Enrollment & Testing Utility
+Styled for Omarchy Tokyo Night, inspired by Apple Touch ID & Windows Hello.
+
+- 10-stage guided multi-view enrollment.
+- Background PTY process runner (zero D-Bus/Portal lockups, completely non-blocking).
+- Apple Touch ID concentric ridge vector animation in Tokyo Night palette.
+- Clear step-by-step guidance: center, shifts, flanks, tip, natural working angle.
+- Instant live verification testing after enrollment.
+"""
+
+import os
+import sys
+import pty
+import math
+import select
+import signal
+import subprocess
+
+from PyQt6.QtCore import (
+    Qt, QThread, pyqtSignal, QTimer, QRectF, QPointF
+)
+from PyQt6.QtGui import (
+    QColor, QPainter, QPainterPath, QPen, QBrush, QFont
+)
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QFrame
+)
+
+# Omarchy Tokyo Night Palette
+COLOR_BG = QColor("#1a1b26")
+COLOR_CARD = QColor("#1e2030")
+COLOR_BORDER = QColor("#2e344f")
+COLOR_RIDGE_EMPTY = QColor("#3b4261")
+COLOR_ACCENT = QColor("#7aa2f7")     # Tokyo Night Blue
+COLOR_SUCCESS = QColor("#9ece6a")    # Tokyo Night Green
+COLOR_WARNING = QColor("#e0af68")    # Tokyo Night Yellow
+COLOR_ERROR = QColor("#f7768e")      # Tokyo Night Red
+COLOR_TEXT_MAIN = QColor("#c0caf5")
+COLOR_TEXT_SUB = QColor("#a9b1d6")
+COLOR_TEXT_MUTED = QColor("#565f89")
+
+STAGE_HINTS = [
+    ("Положите центр пальца", "Прижмите подушечку пальца прямо к сканеру"),
+    ("Слегка сместите центр", "Приложите центр пальца со сдвигом на миллиметр"),
+    ("Наклоните палец влево", "Прикоснитесь левым боком подушечки пальца"),
+    ("Ещё раз левым краем", "Зафиксируйте левую сторону отпечатка"),
+    ("Наклоните палец вправо", "Прикоснитесь правым боком подушечки пальца"),
+    ("Ещё раз правым краем", "Зафиксируйте правую сторону отпечатка"),
+    ("Приложите кончик пальца", "Коснитесь верхней частью подушечки"),
+    ("Ещё раз кончиком пальца", "Зафиксируйте верхнюю зону отпечатка"),
+    ("Ваш обычный рабочий наклон", "Приложите палец так, как вы держите руку при работе"),
+    ("Финальное касание", "Приложите палец свободно для завершения охвата"),
+]
+
+
+class EnrollWorker(QThread):
+    stage_signal = pyqtSignal(int)          # 1..10
+    lift_signal = pyqtSignal()
+    status_hint_signal = pyqtSignal(str, str)
+    completed_signal = pyqtSignal(bool)
+
+    def __init__(self, finger_name="left-index-finger"):
+        super().__init__()
+        self.finger_name = finger_name
+        self.proc = None
+        self._killed = False
+
+    def run(self):
+        master, slave = pty.openpty()
+        cmd = ["fprintd-enroll", "-f", self.finger_name]
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True
+            )
+            os.close(slave)
+
+            buf = ""
+            current_stage = 0
+            while not self._killed:
+                r, _, _ = select.select([master], [], [], 0.08)
+                if not r:
+                    if self.proc.poll() is not None:
+                        break
+                    continue
+                try:
+                    data = os.read(master, 1024).decode("utf-8", "replace")
+                except OSError:
+                    break
+                if not data:
+                    break
+                buf += data
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    if "enroll-stage-passed" in line:
+                        current_stage += 1
+                        self.stage_signal.emit(current_stage)
+                    elif "enroll-remove-and-retry" in line:
+                        self.lift_signal.emit()
+                    elif "enroll-duplicate" in line:
+                        self.status_hint_signal.emit(
+                            "DUPLICATE",
+                            "Этот ракурс уже записан — немного наклоните палец"
+                        )
+                    elif "enroll-retry-scan" in line:
+                        self.status_hint_signal.emit(
+                            "RETRY",
+                            "Касание смазано — приложите палец ещё раз"
+                        )
+                    elif "enroll-completed" in line:
+                        self.completed_signal.emit(True)
+                        try:
+                            os.close(master)
+                        except Exception:
+                            pass
+                        return
+
+            self.proc.wait()
+            if not self._killed:
+                self.completed_signal.emit(current_stage >= 6)
+        except Exception as e:
+            self.status_hint_signal.emit("ERROR", str(e))
+            self.completed_signal.emit(False)
+        finally:
+            try:
+                os.close(master)
+            except Exception:
+                pass
+
+    def cancel(self):
+        self._killed = True
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.send_signal(signal.SIGINT)
+                self.proc.wait(timeout=0.6)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+
+
+class VerifyWorker(QThread):
+    result_signal = pyqtSignal(bool, str)
+
+    def __init__(self, finger_name="left-index-finger"):
+        super().__init__()
+        self.finger_name = finger_name
+        self.proc = None
+        self._killed = False
+
+    def run(self):
+        master, slave = pty.openpty()
+        cmd = ["fprintd-verify", "-f", self.finger_name]
+        try:
+            self.proc = subprocess.Popen(
+                cmd,
+                stdout=slave,
+                stderr=slave,
+                close_fds=True
+            )
+            os.close(slave)
+
+            buf = ""
+            matched = False
+            while not self._killed:
+                r, _, _ = select.select([master], [], [], 0.08)
+                if not r:
+                    if self.proc.poll() is not None:
+                        break
+                    continue
+                try:
+                    data = os.read(master, 1024).decode("utf-8", "replace")
+                except OSError:
+                    break
+                if not data:
+                    break
+                buf += data
+                while "\n" in buf:
+                    line, buf = buf.split("\n", 1)
+                    line = line.strip()
+                    if "verify-match" in line:
+                        matched = True
+                        self.result_signal.emit(True, "Распознано успешно!")
+                        break
+                    elif "verify-no-match" in line:
+                        self.result_signal.emit(False, "Не совпало, попробуйте ещё раз")
+                        break
+                if matched:
+                    break
+
+            self.proc.wait()
+            if not matched and not self._killed:
+                self.result_signal.emit(False, "Завершено")
+        except Exception as e:
+            self.result_signal.emit(False, str(e))
+        finally:
+            try:
+                os.close(master)
+            except Exception:
+                pass
+
+    def cancel(self):
+        self._killed = True
+        if self.proc and self.proc.poll() is None:
+            try:
+                self.proc.send_signal(signal.SIGINT)
+                self.proc.wait(timeout=0.5)
+            except Exception:
+                try:
+                    self.proc.kill()
+                except Exception:
+                    pass
+
+
+class TouchIdFingerprint(QWidget):
+    """
+    Apple Touch ID-style minimalist vector fingerprint.
+    10 concentric biometric ridges that fill smoothly with glowing gradients.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(160, 200)
+        self.stage = 0.0            # 0.0 .. 10.0
+        self.target_stage = 0
+        self.glow_phase = 0.0
+        self.is_success = False
+
+        self.anim_timer = QTimer(self)
+        self.anim_timer.timeout.connect(self._on_tick)
+        self.anim_timer.start(25)
+
+    def _on_tick(self):
+        self.glow_phase += 0.08
+        if self.glow_phase > 2 * math.pi:
+            self.glow_phase -= 2 * math.pi
+
+        if self.stage < self.target_stage:
+            self.stage += 0.25
+            if self.stage > self.target_stage:
+                self.stage = float(self.target_stage)
+            self.update()
+        else:
+            self.update()
+
+    def set_stage(self, stage):
+        self.target_stage = min(10, max(0, stage))
+
+    def set_success(self, success):
+        self.is_success = success
+        if success:
+            self.target_stage = 10
+            self.stage = 10.0
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        cx, cy = self.width() / 2, self.height() / 2 + 10
+        pulse = (math.sin(self.glow_phase) + 1.0) / 2.0
+
+        num_ridges = 10
+        base_radii = [12, 20, 28, 36, 44, 52, 60, 68, 76, 84]
+
+        for i in range(num_ridges):
+            r = base_radii[i]
+            w = r * 1.55
+            h = r * 2.1
+
+            path = QPainterPath()
+            rect = QRectF(cx - w / 2, cy - h / 2, w, h)
+            path.arcMoveTo(rect, 195)
+            path.arcTo(rect, 195, 150)
+
+            is_filled = (i + 1) <= self.stage
+            is_current = (i + 1) == int(self.stage) + 1
+
+            if self.is_success:
+                pen_color = QColor(COLOR_SUCCESS)
+                pen_width = 3.8
+            elif is_filled:
+                t = i / 9.0
+                r_col = int(COLOR_ACCENT.red() * (1 - t) + COLOR_SUCCESS.red() * t)
+                g_col = int(COLOR_ACCENT.green() * (1 - t) + COLOR_SUCCESS.green() * t)
+                b_col = int(COLOR_ACCENT.blue() * (1 - t) + COLOR_SUCCESS.blue() * t)
+                pen_color = QColor(r_col, g_col, b_col)
+                pen_width = 3.6
+            elif is_current:
+                pen_color = QColor(COLOR_ACCENT)
+                pen_color.setAlpha(int(100 + pulse * 140))
+                pen_width = 3.2 + pulse * 0.8
+            else:
+                pen_color = QColor(COLOR_RIDGE_EMPTY)
+                pen_width = 3.0
+
+            pen = QPen(pen_color, pen_width, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+
+        core_color = COLOR_SUCCESS if (self.is_success or self.stage >= 1) else COLOR_ACCENT
+        painter.setBrush(QBrush(core_color))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(cx, cy - 2), 4, 4)
+
+
+class MainWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Настройка отпечатка пальца")
+        self.setFixedSize(440, 560)
+        self.setObjectName("MainWindow")
+
+        self.current_stage = 0
+        self.is_enrolled = False
+        self.is_verifying = False
+
+        self.worker = None
+        self.verify_worker = None
+
+        self.setup_ui()
+        self.start_enrollment()
+
+    def setup_ui(self):
+        self.setStyleSheet(f"""
+            QWidget#MainWindow {{
+                background-color: {COLOR_BG.name()};
+            }}
+            QLabel {{
+                font-family: system-ui, -apple-system, sans-serif;
+            }}
+            QPushButton {{
+                background-color: {COLOR_CARD.name()};
+                color: {COLOR_TEXT_MAIN.name()};
+                border: 1px solid {COLOR_BORDER.name()};
+                border-radius: 12px;
+                padding: 12px 24px;
+                font-size: 14px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: #292e42;
+                border-color: {COLOR_ACCENT.name()};
+            }}
+            QPushButton#PrimaryBtn {{
+                background-color: {COLOR_ACCENT.name()};
+                color: #1a1b26;
+                font-weight: bold;
+                border: none;
+            }}
+            QPushButton#PrimaryBtn:hover {{
+                background-color: #89b4fa;
+            }}
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(36, 40, 36, 36)
+        layout.setSpacing(18)
+        layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+
+        self.title_label = QLabel("Положите палец")
+        self.title_label.setStyleSheet("font-size: 22px; font-weight: 600; color: #c0caf5;")
+        self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.title_label)
+
+        self.desc_label = QLabel("Прижмите подушечку пальца ровно к сканеру")
+        self.desc_label.setStyleSheet("font-size: 13px; color: #a9b1d6; line-height: 1.4;")
+        self.desc_label.setWordWrap(True)
+        self.desc_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.desc_label)
+
+        layout.addSpacing(10)
+
+        self.fingerprint_widget = TouchIdFingerprint(self)
+        layout.addWidget(self.fingerprint_widget, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        layout.addSpacing(10)
+
+        dots_layout = QHBoxLayout()
+        dots_layout.setSpacing(8)
+        dots_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.dots = []
+        for _ in range(10):
+            dot = QFrame()
+            dot.setFixedSize(8, 8)
+            dot.setStyleSheet(f"background-color: {COLOR_RIDGE_EMPTY.name()}; border-radius: 4px;")
+            dots_layout.addWidget(dot)
+            self.dots.append(dot)
+        layout.addLayout(dots_layout)
+
+        self.step_label = QLabel("Шаг 1 из 10")
+        self.step_label.setStyleSheet("font-size: 12px; color: #565f89; font-weight: 500;")
+        self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.step_label)
+
+        layout.addStretch()
+
+        btn_layout = QHBoxLayout()
+        self.action_btn = QPushButton("Отмена")
+        self.action_btn.clicked.connect(self.on_action_clicked)
+        btn_layout.addWidget(self.action_btn)
+        layout.addLayout(btn_layout)
+
+    def update_dots(self):
+        for idx, dot in enumerate(self.dots):
+            if idx < self.current_stage:
+                dot.setStyleSheet(f"background-color: {COLOR_SUCCESS.name()}; border-radius: 4px;")
+            elif idx == self.current_stage:
+                dot.setStyleSheet(f"background-color: {COLOR_ACCENT.name()}; border-radius: 4px;")
+            else:
+                dot.setStyleSheet(f"background-color: {COLOR_RIDGE_EMPTY.name()}; border-radius: 4px;")
+
+    def update_prompt(self):
+        if self.current_stage < len(STAGE_HINTS):
+            title, desc = STAGE_HINTS[self.current_stage]
+            self.title_label.setText(title)
+            self.desc_label.setText(desc)
+            self.desc_label.setStyleSheet("font-size: 13px; color: #a9b1d6;")
+            self.step_label.setText(f"Шаг {self.current_stage + 1} из 10")
+            self.fingerprint_widget.set_stage(self.current_stage)
+            self.update_dots()
+        else:
+            self.show_success_screen()
+
+    def show_success_screen(self):
+        self.is_enrolled = True
+        self.fingerprint_widget.set_success(True)
+        self.title_label.setText("Отпечаток настроен")
+        self.desc_label.setText("Все 10 ракурсов записаны. Ноутбук готов к быстрой разблокировке под любым углом!")
+        self.desc_label.setStyleSheet("font-size: 13px; color: #9ece6a;")
+        self.step_label.setText("Готово к использованию")
+        self.update_dots()
+
+        self.action_btn.setText("Проверить касанием")
+        self.action_btn.setObjectName("PrimaryBtn")
+        self.action_btn.setStyleSheet("")
+
+    def start_enrollment(self):
+        self.current_stage = 0
+        self.update_prompt()
+        self.worker = EnrollWorker("left-index-finger")
+        self.worker.stage_signal.connect(self.on_stage_passed)
+        self.worker.lift_signal.connect(self.on_lift_finger)
+        self.worker.status_hint_signal.connect(self.on_status_hint)
+        self.worker.completed_signal.connect(self.on_enroll_completed)
+        self.worker.start()
+
+    def on_stage_passed(self, stage):
+        self.current_stage = stage
+        self.title_label.setText("Отпустите палец")
+        self.desc_label.setText("Поднимите палец со сканера для перехода к следующему ракурсу")
+        self.desc_label.setStyleSheet("font-size: 13px; color: #7aa2f7; font-weight: bold;")
+        self.fingerprint_widget.set_stage(self.current_stage)
+        self.update_dots()
+
+    def on_lift_finger(self):
+        self.update_prompt()
+
+    def on_status_hint(self, code, message):
+        if code == "DUPLICATE":
+            self.desc_label.setText(message)
+            self.desc_label.setStyleSheet("font-size: 13px; color: #e0af68; font-weight: bold;")
+        elif code == "RETRY":
+            self.desc_label.setText(message)
+            self.desc_label.setStyleSheet("font-size: 13px; color: #eb927b;")
+        elif code == "ERROR":
+            self.desc_label.setText(f"Ошибка: {message}")
+            self.desc_label.setStyleSheet("font-size: 13px; color: #f7768e;")
+
+    def on_enroll_completed(self, success):
+        if success:
+            self.show_success_screen()
+        else:
+            self.desc_label.setText("Регистрация завершена или прервана.")
+            self.desc_label.setStyleSheet("font-size: 13px; color: #a9b1d6;")
+
+    def on_action_clicked(self):
+        if not self.is_enrolled:
+            if self.worker:
+                self.worker.cancel()
+            self.close()
+        elif not self.is_verifying:
+            self.start_verify_test()
+        else:
+            self.close()
+
+    def start_verify_test(self):
+        self.is_verifying = True
+        self.title_label.setText("Коснитесь сканера")
+        self.desc_label.setText("Приложите палец под любым естественным углом для проверки")
+        self.desc_label.setStyleSheet("font-size: 13px; color: #a9b1d6;")
+        self.action_btn.setText("Закрыть")
+        self.action_btn.setObjectName("")
+        self.action_btn.setStyleSheet("")
+
+        self.verify_worker = VerifyWorker("left-index-finger")
+        self.verify_worker.result_signal.connect(self.on_verify_result)
+        self.verify_worker.start()
+
+    def on_verify_result(self, matched, message):
+        if matched:
+            self.title_label.setText("✓ Разблокировано!")
+            self.title_label.setStyleSheet("font-size: 22px; font-weight: 600; color: #9ece6a;")
+            self.desc_label.setText("Мгновенное распознавание. Всё работает идеально!")
+            self.desc_label.setStyleSheet("font-size: 13px; color: #9ece6a;")
+            self.fingerprint_widget.set_success(True)
+        else:
+            self.desc_label.setText(message)
+
+    def closeEvent(self, event):
+        if self.worker:
+            self.worker.cancel()
+        if self.verify_worker:
+            self.verify_worker.cancel()
+        event.accept()
+
+
+def main():
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
