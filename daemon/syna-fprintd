@@ -170,6 +170,32 @@ class FprintDevice(dbus.service.Object):
             return []
 
     # --- org.freedesktop.DBus.Properties ---
+    @dbus.service.signal(dbus_interface=dbus.PROPERTIES_IFACE, signature="sa{sv}as")
+    def PropertiesChanged(self, interface_name, changed_properties, invalidated_properties):
+        pass
+
+    @dbus.service.method(
+        dbus_interface=dbus.INTROSPECTABLE_IFACE,
+        in_signature="",
+        out_signature="s",
+        path_keyword="object_path",
+        connection_keyword="connection",
+    )
+    def Introspect(self, object_path=None, connection=None):
+        xml = dbus.service.Object.Introspect(self, object_path, connection)
+        props_xml = """    <property name="name" type="s" access="read"/>
+    <property name="num-enroll-stages" type="i" access="read"/>
+    <property name="scan-type" type="s" access="read"/>
+    <property name="finger-present" type="b" access="read"/>
+    <property name="finger-needed" type="b" access="read"/>
+  </interface>"""
+        needle = f'<interface name="{DEVICE_INTERFACE}">'
+        if needle in xml:
+            idx = xml.find("</interface>", xml.find(needle))
+            if idx != -1:
+                xml = xml[:idx] + props_xml + xml[idx + len("</interface>"):]
+        return xml
+
     @dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
     def Get(self, interface_name, property_name):
         if interface_name != DEVICE_INTERFACE:
