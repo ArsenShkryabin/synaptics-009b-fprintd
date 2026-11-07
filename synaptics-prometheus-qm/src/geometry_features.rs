@@ -319,17 +319,19 @@ pub struct CompareRecord {
 
 impl CompareRecord {
     /// The record when `descriptor_match_loop` finds no gallery match (`count == 0`): the DLL's inner
-    /// gate `*piVar1 != 0` skips the three feature kernels, leaving those slots at the caller's init.
+    /// gate `*piVar1 != 0` (`0x180004480`) skips the three feature kernels, leaving those slots at the
+    /// `init_work_record` (`0x1800078d0`) defaults (`0x7fff` sentinels on `+0x68/+0x6c/+0x70/+0x84/+0x98/+0x9c`,
+    /// `0` on `+0x74..+0x80`).
     fn empty(reject: i32) -> Self {
         CompareRecord {
-            hamming_mean: 0,
-            hamming_median: 0,
-            coverage_scalar: 0,
-            coverage_buckets: [0; 5],
+            hamming_mean: 0x7fff,
+            hamming_median: 0x7fff,
+            coverage_scalar: 0x7fff,
+            coverage_buckets: [0, 0, 0, 0, 0x7fff],
             match_count: 0,
             reject_count: reject,
-            angle_avg_all: 0,
-            angle_avg_class0: 0,
+            angle_avg_all: 0x7fff,
+            angle_avg_class0: 0x7fff,
             angle_count: 0,
         }
     }

@@ -10,9 +10,9 @@
 //! cargo run -p synaptics-prometheus-qm --example doh_field_diff -- [ksize ...]
 //! ```
 
+use std::path::Path;
 use synaptics_prometheus_qm::detect::{doh_response, DohParams};
 
-const IMAGE: &[u8] = include_bytes!("../../tools/qm-dll-oracle/fixtures/qmflip_0000.u8");
 const W: usize = 144;
 const H: usize = 56;
 
@@ -25,11 +25,9 @@ const GOLDEN: &[(&str, u64)] = &[
     ("ly", 0xe3bf_fa50_9ff1_fe21),
 ];
 
-const GOLDEN_TXT: &str = include_str!("../../tools/qm-dll-oracle/golden/doh_field.txt");
-
 /// The `DOHFIELD_ROW <plane> <y> : ...` rows the oracle dumps in full (the response plane).
-fn golden_rows(plane: &str) -> Vec<Vec<i32>> {
-    GOLDEN_TXT
+fn golden_rows(golden_txt: &str, plane: &str) -> Vec<Vec<i32>> {
+    golden_txt
         .lines()
         .filter_map(|l| {
             let rest = l.strip_prefix("DOHFIELD_ROW ")?;
@@ -52,6 +50,14 @@ fn fnv1a64(v: &[i32]) -> u64 {
 }
 
 fn main() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tools/qm-dll-oracle");
+    let img_path = root.join("fixtures/qmflip_0000.u8");
+    let gld_path = root.join("golden/doh_field.txt");
+    let image = std::fs::read(&img_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", img_path.display()));
+    let golden_txt = std::fs::read_to_string(&gld_path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", gld_path.display()));
+
     let ksizes: Vec<usize> = std::env::args()
         .skip(1)
         .filter_map(|a| a.parse().ok())
@@ -59,14 +65,14 @@ fn main() {
     let ksizes = if ksizes.is_empty() { vec![5usize, 35] } else { ksizes };
     println!("image {W}x{H}, hash {:016x}", {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
-        for &b in IMAGE {
+        for &b in &image {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
         h
     });
     for ksize in ksizes {
-        let f = doh_response(IMAGE, W, H, &DohParams { ksize, sigma: 0.0, scale: 1 });
+        let f = doh_response(&image, W, H, &DohParams { ksize, sigma: 0.0, scale: 1 });
         println!("--- ksize {ksize}");
         for (name, want) in GOLDEN {
             let plane: &[i32] = match *name {
@@ -87,7 +93,7 @@ fn main() {
         }
         // Where do the response mismatches live? A border-only band means the halo model differs;
         // interior mismatches mean the kernel chain does.
-        let rows = golden_rows("response");
+        let rows = golden_rows(&golden_txt, "response");
         if rows.len() != H {
             continue;
         }

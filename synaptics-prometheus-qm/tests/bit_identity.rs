@@ -128,11 +128,13 @@ fn match_output_is_unchanged() {
     );
     // The learned MetViper scorer maps this unrealistically-perfect synthetic self-match vector (Hamming
     // 0 everywhere — out of its real-fingerprint training distribution) to 0, and a scrambled cross-match
-    // to 2221: on structureless noise the scorer does NOT rank a self-match above a cross-match (see the
-    // module header). The value being pinned is the arithmetic, not the verdict — a meaningful non-zero
-    // self score needs a real capture (Phase F).
+    // to 1709 (re-baked 2026-11-06 after aligning CompareRecord::empty with init_work_record@0x1800078d0
+    // 0x7fff sentinels and sort_anchor_order with the qsort comparator @0x1800088a0: primary +0x68
+    // hamming_mean asc, secondary +0x60 match_count desc). On structureless noise the scorer does NOT
+    // rank a self-match above a cross-match (see the module header). The value being pinned is the
+    // arithmetic, not the verdict — a meaningful non-zero self score needs a real capture (Phase F).
     assert_eq!(score(&a, &a, MatchLevel::Level1).score, 0, "self score");
-    assert_eq!(score(&a, &b, MatchLevel::Level1).score, 2221, "cross score");
+    assert_eq!(score(&a, &b, MatchLevel::Level1).score, 1709, "cross score");
     assert_eq!(diagnose(&a, &b, MatchLevel::Level2, W as i32, H as i32).anchor_count, 19, "cross anchor count");
     assert!(!d.decision, "self decision");
 }

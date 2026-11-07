@@ -14,6 +14,26 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Best-effort mode change. A caller that does not own an existing store root
+/// (e.g. an unprivileged `syna-tool list`) must still be able to open it; only
+/// a real I/O error is propagated.
+fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        match fs::set_permissions(path, fs::Permissions::from_mode(mode)) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path, mode);
+        Ok(())
+    }
+}
+
 /// File magic + version for a stored template.
 const MAGIC: &[u8; 4] = b"SPTS";
 const VERSION: u8 = 1;
@@ -42,6 +62,9 @@ impl TemplateStore {
     pub fn open(root: impl AsRef<Path>) -> io::Result<Self> {
         let root = root.as_ref().to_path_buf();
         fs::create_dir_all(&root)?;
+        // Biometric templates are private to the owner; never leave the store
+        // world-readable even when the caller's umask is 022.
+        set_mode(&root, 0o700)?;
         Ok(Self { root })
     }
 
@@ -64,11 +87,14 @@ impl TemplateStore {
         let path = self.finger_path(user, subtype);
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
+            set_mode(parent, 0o700)?;
         }
         // write to a temp file then rename for atomicity
         let tmp = path.with_extension("tmp");
         fs::write(&tmp, &out)?;
-        fs::rename(&tmp, &path)
+        set_mode(&tmp, 0o600)?;
+        fs::rename(&tmp, &path)?;
+        set_mode(&path, 0o600)
     }
 
     /// Load the stored template for `(user, subtype)`, or `None` if absent.
@@ -178,6 +204,29 @@ mod tests {
         assert!(store.delete(1, 0x05).unwrap());
         assert!(!store.delete(1, 0x05).unwrap());
         assert_eq!(store.list_fingers(1).unwrap(), vec![0x08]);
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn store_creates_private_files() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = temp_root("perm");
+        let _ = fs::remove_dir_all(&root);
+        let store = TemplateStore::open(&root).unwrap();
+        store.store(1000, 0x07, b"private").unwrap();
+
+        let file = root.join("1000").join("07.tmpl");
+        let file_mode = fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        let dir_mode = fs::metadata(root.join("1000"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(file_mode, 0o600, "template file must be owner-only");
+        assert_eq!(dir_mode, 0o700, "per-user template dir must be owner-only");
 
         let _ = fs::remove_dir_all(&root);
     }

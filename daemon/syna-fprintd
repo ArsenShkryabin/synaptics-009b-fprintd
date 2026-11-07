@@ -7,6 +7,7 @@ Provides standard Fprint Manager and Device interfaces for fprintd-enroll, fprin
 import sys
 import os
 import pwd
+import shutil
 import signal
 import subprocess
 import threading
@@ -31,7 +32,18 @@ DEVICE_PATH = "/net/reactivated/Fprint/Device/0"
 MANAGER_INTERFACE = "net.reactivated.Fprint.Manager"
 DEVICE_INTERFACE = "net.reactivated.Fprint.Device"
 
-SYNA_TOOL = "/usr/local/bin/syna-tool"
+# Resolve the helper at runtime so both `install.sh` (/usr/local/bin) and the
+# AUR package (/usr/bin) work.  An explicit SYNA_TOOL env var still wins.
+SYNA_TOOL = (
+    os.environ.get("SYNA_TOOL")
+    or shutil.which("syna-tool")
+    or "/usr/local/bin/syna-tool"
+)
+
+# The daemon runs as root and creates/replaces template files.  Never let a
+# template or a temp file become world-readable, even if the caller's umask is
+# 022.  Subprocesses (syna-tool) inherit this.
+os.umask(0o077)
 
 class NoSuchDevice(dbus.DBusException):
     _dbus_error_name = "net.reactivated.Fprint.Error.NoSuchDevice"
@@ -58,6 +70,7 @@ class FprintDevice(dbus.service.Object):
         self.active_proc = None
         self.worker_thread = None
         self.stop_requested = False
+        self.operation_done = True
 
         self._properties = {
             "name": dbus.String("Synaptics Prometheus (06cb:009b)"),
@@ -83,7 +96,106 @@ class FprintDevice(dbus.service.Object):
             self.claimed_by = None
             self.claim_sender = None
 
+    # --- caller authorization -------------------------------------------------
+    #
+    # The system-bus policy lets every local user call this service, exactly
+    # like the real fprintd.  Authorization must therefore happen here, not in
+    # the bus policy.  All user-facing methods take the D-Bus `sender` and
+    # resolve it to a UID; the caller may only act for its own account (root
+    # may act for any account, which is what pam_fprintd needs under sudo).
+    def _caller_pw(self, sender):
+        if not sender:
+            raise PermissionDenied("missing D-Bus sender")
+        try:
+            uid = int(self.connection.get_unix_user(sender))
+        except Exception as e:
+            logging.warning("cannot resolve D-Bus sender %s: %s", sender, e)
+            raise PermissionDenied("cannot resolve caller identity")
+        try:
+            return pwd.getpwuid(uid)
+        except KeyError:
+            raise PermissionDenied(f"caller UID {uid} has no passwd entry")
+
+    def _resolve_user(self, username, sender):
+        """Return the target passwd entry; only self or root may be targeted."""
+        caller = self._caller_pw(sender)
+        if not username:
+            return caller
+        try:
+            target = pwd.getpwnam(username)
+        except KeyError:
+            raise PermissionDenied(f"unknown user {username!r}")
+        if caller.pw_uid != 0 and target.pw_uid != caller.pw_uid:
+            logging.warning(
+                "permission denied: uid %d (%s) tried to act for %s (uid %d)",
+                caller.pw_uid,
+                caller.pw_name,
+                target.pw_name,
+                target.pw_uid,
+            )
+            raise PermissionDenied("caller may only act for its own user")
+        return target
+
+    def _require_claim(self, sender):
+        """Return the claimed username, requiring *this* sender to own the claim."""
+        if not self.claimed_by or not self.claim_sender:
+            raise ClaimDevice()
+        caller = self._caller_pw(sender)
+        if caller.pw_uid != 0 and sender != self.claim_sender:
+            raise PermissionDenied("device is claimed by another caller")
+        return self.claimed_by
+
+    def _require_claimant_for_stop(self, sender):
+        """Stop/release: root or the claimant; no claim is a harmless no-op."""
+        if not self.claimed_by or not self.claim_sender:
+            return
+        caller = self._caller_pw(sender)
+        if caller.pw_uid != 0 and sender != self.claim_sender:
+            raise PermissionDenied("only the claimant may stop this operation")
+
+    def _list_fingers(self, username, sender):
+        target = self._resolve_user(username, sender)
+        try:
+            res = subprocess.run(
+                [SYNA_TOOL, "list", str(target.pw_uid)],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            fingers = [f.strip() for f in res.stdout.strip().splitlines() if f.strip()]
+            logging.info("Found enrolled fingers for %s: %s", target.pw_name, fingers)
+            return fingers
+        except Exception as e:
+            logging.error("Error listing fingers for %s: %s", target.pw_name, e)
+            return []
+
     # --- org.freedesktop.DBus.Properties ---
+    @dbus.service.signal(dbus_interface=dbus.PROPERTIES_IFACE, signature="sa{sv}as")
+    def PropertiesChanged(self, interface_name, changed_properties, invalidated_properties):
+        pass
+
+    @dbus.service.method(
+        dbus_interface=dbus.INTROSPECTABLE_IFACE,
+        in_signature="",
+        out_signature="s",
+        path_keyword="object_path",
+        connection_keyword="connection",
+    )
+    def Introspect(self, object_path=None, connection=None):
+        xml = dbus.service.Object.Introspect(self, object_path, connection)
+        props_xml = """    <property name="name" type="s" access="read"/>
+    <property name="num-enroll-stages" type="i" access="read"/>
+    <property name="scan-type" type="s" access="read"/>
+    <property name="finger-present" type="b" access="read"/>
+    <property name="finger-needed" type="b" access="read"/>
+  </interface>"""
+        needle = f'<interface name="{DEVICE_INTERFACE}">'
+        if needle in xml:
+            idx = xml.find("</interface>", xml.find(needle))
+            if idx != -1:
+                xml = xml[:idx] + props_xml + xml[idx + len("</interface>"):]
+        return xml
+
     @dbus.service.method(dbus_interface=dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
     def Get(self, interface_name, property_name):
         if interface_name != DEVICE_INTERFACE:
@@ -119,13 +231,13 @@ class FprintDevice(dbus.service.Object):
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
                          sender_keyword="sender")
     def Claim(self, username, sender=None):
-        if not username:
-            try:
-                caller_uid = self.connection.get_unix_user(sender)
-                username = pwd.getpwuid(caller_uid).pw_name
-            except Exception:
-                username = "dhh"
-        logging.info(f"Claim by {username} ({sender})")
+        caller = self._resolve_user(username, sender)
+        logging.info(
+            "Claim by %s (uid %d, sender %s)",
+            caller.pw_name,
+            caller.pw_uid,
+            sender,
+        )
         if self.claimed_by is not None and self.claim_sender != sender:
             try:
                 self.connection.get_unix_user(self.claim_sender)
@@ -136,51 +248,59 @@ class FprintDevice(dbus.service.Object):
                 self.claim_sender = None
             if self.claimed_by is not None and self.claim_sender != sender:
                 raise AlreadyInUse()
-        self.claimed_by = username
+        self.claimed_by = caller.pw_name
         self.claim_sender = sender
 
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="",
                          sender_keyword="sender")
     def Release(self, sender=None):
         logging.info(f"Release by {sender}")
+        self._require_claimant_for_stop(sender)
         self._stop_current_operation()
         self.claimed_by = None
         self.claim_sender = None
 
-    def _get_uid(self, username):
-        try:
-            return pwd.getpwnam(username).pw_uid
-        except KeyError:
-            return 1000
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="as",
+                         sender_keyword="sender")
+    def ListEnrolledFingers(self, username, sender=None):
+        logging.info(f"ListEnrolledFingers for {username} (sender {sender})")
+        return self._list_fingers(username, sender)
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="as")
-    def ListEnrolledFingers(self, username):
-        if not username:
-            username = "dhh"
-        logging.info(f"ListEnrolledFingers for {username}")
-        uid = self._get_uid(username)
-        try:
-            res = subprocess.run([SYNA_TOOL, "list", str(uid)], capture_output=True, text=True, check=True)
-            fingers = [f.strip() for f in res.stdout.strip().splitlines() if f.strip()]
-            logging.info(f"Found enrolled fingers: {fingers}")
-            return fingers
-        except Exception as e:
-            logging.error(f"Error listing fingers: {e}")
-            return []
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
+                         sender_keyword="sender")
+    def DeleteEnrolledFingers(self, username, sender=None):
+        target = self._resolve_user(username, sender)
+        logging.info("DeleteEnrolledFingers for %s (uid %d)", target.pw_name, target.pw_uid)
+        if self.claimed_by is not None and sender != self.claim_sender:
+            caller = self._caller_pw(sender)
+            if caller.pw_uid != 0:
+                raise PermissionDenied("device is claimed by another caller")
+        subprocess.run([SYNA_TOOL, "delete", str(target.pw_uid)], check=False)
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
-    def DeleteEnrolledFingers(self, username):
-        logging.info(f"DeleteEnrolledFingers for {username}")
-        uid = self._get_uid(username)
-        subprocess.run([SYNA_TOOL, "delete", str(uid)])
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="",
+                         sender_keyword="sender")
+    def DeleteEnrolledFingers2(self, sender=None):
+        logging.info(f"DeleteEnrolledFingers2 (sender {sender})")
+        if self.claimed_by:
+            username = self._require_claim(sender)
+        else:
+            username = self._caller_pw(sender).pw_name
+        target = self._resolve_user(username, sender)
+        subprocess.run([SYNA_TOOL, "delete", str(target.pw_uid)], check=False)
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
-    def DeleteEnrolledFinger(self, finger_name):
-        logging.info(f"DeleteEnrolledFinger {finger_name}")
-        if not self.claimed_by:
-            raise ClaimDevice()
-        uid = self._get_uid(self.claimed_by)
-        subprocess.run([SYNA_TOOL, "delete", str(uid), finger_name])
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
+                         sender_keyword="sender")
+    def DeleteEnrolledFinger(self, finger_name, sender=None):
+        logging.info(f"DeleteEnrolledFinger {finger_name} (sender {sender})")
+        if self.claimed_by:
+            username = self._require_claim(sender)
+        else:
+            username = self._caller_pw(sender).pw_name
+        target = self._resolve_user(username, sender)
+        subprocess.run(
+            [SYNA_TOOL, "delete", str(target.pw_uid), finger_name],
+            check=False,
+        )
 
     def _stop_current_operation(self):
         self.stop_requested = True
@@ -198,15 +318,17 @@ class FprintDevice(dbus.service.Object):
                     pass
         self.active_proc = None
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
-    def EnrollStart(self, finger_name):
-        logging.info(f"EnrollStart for finger: {finger_name}")
-        if not self.claimed_by:
-            raise ClaimDevice()
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
+                         sender_keyword="sender")
+    def EnrollStart(self, finger_name, sender=None):
+        logging.info(f"EnrollStart for finger: {finger_name} (sender {sender})")
+        username = self._require_claim(sender)
+        target = self._resolve_user(username, sender)
+        uid = target.pw_uid
 
         self._stop_current_operation()
         self.stop_requested = False
-        uid = self._get_uid(self.claimed_by)
+        self.operation_done = False
 
         def worker():
             try:
@@ -234,6 +356,7 @@ class FprintDevice(dbus.service.Object):
                 t_err = threading.Thread(target=read_stderr, daemon=True)
                 t_err.start()
 
+                done_result = None
                 for line in proc.stdout:
                     if self.stop_requested:
                         break
@@ -245,8 +368,6 @@ class FprintDevice(dbus.service.Object):
                         GLib.idle_add(self.EnrollStatus, stage_result, False)
                     elif line.startswith("DONE:"):
                         done_result = line.split(":")[1]
-                        success = (done_result == "enroll-completed")
-                        GLib.idle_add(self.EnrollStatus, done_result, True)
                         break
 
                 proc.wait()
@@ -254,31 +375,45 @@ class FprintDevice(dbus.service.Object):
                 err = "".join(stderr_lines).strip()
                 if err:
                     logging.info(f"syna-tool stderr: {err}")
+
+                if not self.stop_requested and not self.operation_done:
+                    self.operation_done = True
+                    GLib.idle_add(
+                        self.EnrollStatus,
+                        done_result or "enroll-failed",
+                        True,
+                    )
             except Exception as e:
                 logging.error(f"Enrollment worker error: {e}")
-                GLib.idle_add(self.EnrollStatus, "enroll-failed", True)
+                if not self.operation_done:
+                    self.operation_done = True
+                    GLib.idle_add(self.EnrollStatus, "enroll-failed", True)
             finally:
                 self.active_proc = None
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="")
-    def EnrollStop(self):
-        logging.info("EnrollStop requested")
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="",
+                         sender_keyword="sender")
+    def EnrollStop(self, sender=None):
+        logging.info(f"EnrollStop requested (sender {sender})")
+        self._require_claimant_for_stop(sender)
+        was_done = self.operation_done
+        self.operation_done = True
         self._stop_current_operation()
-        GLib.idle_add(self.EnrollStatus, "enroll-unknown-error", True)
+        if not was_done:
+            GLib.idle_add(self.EnrollStatus, "enroll-unknown-error", True)
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="")
-    def VerifyStart(self, finger_name):
-        logging.info(f"VerifyStart for finger: {finger_name}")
-        if not self.claimed_by:
-            self.claimed_by = "dhh"
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
+                         sender_keyword="sender")
+    def VerifyStart(self, finger_name, sender=None):
+        logging.info(f"VerifyStart for finger: {finger_name} (sender {sender})")
+        username = self._require_claim(sender)
+        target = self._resolve_user(username, sender)
+        uid = target.pw_uid
 
-        user = self.claimed_by
-        uid = self._get_uid(user)
-
-        fingers = self.ListEnrolledFingers(user)
+        fingers = self._list_fingers(username, sender)
         if not fingers:
             raise NoEnrolledPrints()
 
@@ -287,6 +422,7 @@ class FprintDevice(dbus.service.Object):
 
         self._stop_current_operation()
         self.stop_requested = False
+        self.operation_done = False
 
         def worker():
             try:
@@ -338,7 +474,8 @@ class FprintDevice(dbus.service.Object):
                 if err:
                     logging.info(f"syna-tool stderr: {err}")
 
-                if not self.stop_requested:
+                if not self.stop_requested and not self.operation_done:
+                    self.operation_done = True
                     if matched:
                         GLib.idle_add(self.VerifyFingerMatched, matched_name)
                         GLib.idle_add(self.VerifyStatus, "verify-match", True)
@@ -346,18 +483,25 @@ class FprintDevice(dbus.service.Object):
                         GLib.idle_add(self.VerifyStatus, "verify-no-match", True)
             except Exception as e:
                 logging.error(f"Verify worker error: {e}")
-                GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
+                if not self.operation_done:
+                    self.operation_done = True
+                    GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
             finally:
                 self.active_proc = None
 
         self.worker_thread = threading.Thread(target=worker, daemon=True)
         self.worker_thread.start()
 
-    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="")
-    def VerifyStop(self):
-        logging.info("VerifyStop requested")
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="",
+                         sender_keyword="sender")
+    def VerifyStop(self, sender=None):
+        logging.info(f"VerifyStop requested (sender {sender})")
+        self._require_claimant_for_stop(sender)
+        was_done = self.operation_done
+        self.operation_done = True
         self._stop_current_operation()
-        GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
+        if not was_done:
+            GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
 
 
 class FprintManager(dbus.service.Object):
@@ -377,6 +521,15 @@ class FprintManager(dbus.service.Object):
 
 
 def main():
+    certstore_path = "/etc/synaptics/certstore.bin"
+    if not os.path.exists(certstore_path):
+        logging.info("No pairing certstore at %s, auto-pairing via %s...", certstore_path, SYNA_TOOL)
+        try:
+            subprocess.run([SYNA_TOOL, "pair", certstore_path], check=True)
+            logging.info("Auto-pairing succeeded: %s", certstore_path)
+        except Exception as e:
+            logging.error("Auto-pairing failed: %s", e)
+
     bus = dbus.SystemBus()
     bus_name = dbus.service.BusName(BUS_NAME, bus)
     _mgr = FprintManager(bus_name)

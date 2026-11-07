@@ -4,7 +4,7 @@
 //! Runs before every `syna_capture_read_dispatch` and at identify/enroll start. Mirrors
 //! `syna_upload_selected_fw_blob` → `syna_commit_then_send_unlock` (`0x45` probe + `0x06` send).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::fw_registry::{self, FwModuleRecord};
 use crate::proto::Opcode;
@@ -49,7 +49,7 @@ pub fn would_dedup(want_flags: fw_registry::FwWantFlags, fw_upload_context: bool
 /// Load module bytes: embedded `record.payload`, then `SYNA_PREARM_MODULE`, then the extracted
 /// blob under `data/fw_modules/fwmod_{src_addr:016x}.bin` (the whole firmware-module table dumped from
 /// the DLL via the Ghidra `run_script_inline` extractor), falling back to the legacy `prearm_` name
-/// and the flat `data/` dir. (`fwmod`, not `prearm`: only ~2 of the ~13 want-flag classes are pre-arm.)
+/// and system directories (`/usr/share/synaptics/fw_modules`, `/usr/lib/firmware/synaptics`).
 ///
 /// The `data/` blobs are vendor firmware (gitignored). Length is checked against `record.len` so a
 /// truncated/wrong file is rejected rather than sent malformed.
@@ -62,15 +62,34 @@ pub fn resolve_payload(record: &FwModuleRecord) -> Option<Vec<u8>> {
     {
         return Some(b);
     }
-    // `fwmod_<src_addr>.bin` under `data/fw_modules/` — the extracted firmware-module blob, keyed by
-    // its DLL source address. (`fwmod`, not `prearm`: pre-arm is only ~2 of the ~13 want-flag classes
-    // these blobs span — see `docs/bringup/fw-wants-flags.md`. The old `prearm_` name is still read as a
-    // fallback so un-renamed local blob sets keep resolving.)
-    for stem in [
+
+    let stems = [
         format!("fwmod_{:016x}.bin", record.src_addr),
         format!("prearm_{:016x}.bin", record.src_addr),
-    ] {
-        for path in [Path::new("data").join("fw_modules").join(&stem), Path::new("data").join(&stem)] {
+    ];
+
+    let mut search_dirs = vec![
+        Path::new("data").join("fw_modules"),
+        Path::new("synaptics-prometheus").join("data").join("fw_modules"),
+        Path::new("data").to_path_buf(),
+        Path::new("/usr/share/synaptics/fw_modules").to_path_buf(),
+        Path::new("/usr/lib/firmware/synaptics").to_path_buf(),
+        Path::new("/etc/synaptics/fw_modules").to_path_buf(),
+    ];
+
+    if let Ok(env_dir) = std::env::var("SYNA_FW_MODULES_DIR") {
+        search_dirs.insert(0, PathBuf::from(env_dir));
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(exe_dir) = exe.parent()
+    {
+        search_dirs.push(exe_dir.join("../share/synaptics/fw_modules"));
+        search_dirs.push(exe_dir.join("data/fw_modules"));
+    }
+
+    for dir in &search_dirs {
+        for stem in &stems {
+            let path = dir.join(stem);
             if let Ok(b) = std::fs::read(&path)
                 && b.len() == record.len as usize
             {
@@ -78,7 +97,58 @@ pub fn resolve_payload(record: &FwModuleRecord) -> Option<Vec<u8>> {
             }
         }
     }
+
+    // Direct PE .rdata slice fallback if the DLL is accessible on disk.
+    for dll_path in [
+        Path::new("windows-driver/synaWudfBioUsb.dll"),
+        Path::new("/usr/share/synaptics/synaWudfBioUsb.dll"),
+        Path::new("/etc/synaptics/synaWudfBioUsb.dll"),
+    ] {
+        if let Ok(b) = std::fs::read(dll_path)
+            && let Ok(slice) = extract_pe_module(&b, record.src_addr, record.len as usize)
+        {
+            return Some(slice);
+        }
+    }
+
     None
+}
+
+/// Slice a firmware module from `synaWudfBioUsb.dll` using PE section headers.
+fn extract_pe_module(pe_bytes: &[u8], vma: u64, len: usize) -> Result<Vec<u8>, ()> {
+    if pe_bytes.len() < 0x200 {
+        return Err(());
+    }
+    let pe_off = u32::from_le_bytes(pe_bytes[0x3c..0x40].try_into().map_err(|_| ())?) as usize;
+    if pe_bytes.len() < pe_off + 24 {
+        return Err(());
+    }
+    let num_sections = u16::from_le_bytes(pe_bytes[pe_off + 6..pe_off + 8].try_into().map_err(|_| ())?) as usize;
+    let opt_hdr_size = u16::from_le_bytes(pe_bytes[pe_off + 20..pe_off + 22].try_into().map_err(|_| ())?) as usize;
+    let image_base = u64::from_le_bytes(pe_bytes[pe_off + 24 + 24..pe_off + 24 + 32].try_into().map_err(|_| ())?);
+    if vma < image_base {
+        return Err(());
+    }
+    let rva = (vma - image_base) as u32;
+    let sec_start = pe_off + 24 + opt_hdr_size;
+
+    for i in 0..num_sections {
+        let off = sec_start + i * 40;
+        if pe_bytes.len() < off + 40 {
+            break;
+        }
+        let sec = &pe_bytes[off..off + 40];
+        let vsize = u32::from_le_bytes(sec[8..12].try_into().map_err(|_| ())?);
+        let vaddr = u32::from_le_bytes(sec[12..16].try_into().map_err(|_| ())?);
+        let roff = u32::from_le_bytes(sec[20..24].try_into().map_err(|_| ())?) as usize;
+        if rva >= vaddr && rva < vaddr + vsize {
+            let file_off = roff + (rva - vaddr) as usize;
+            if pe_bytes.len() >= file_off + len {
+                return Ok(pe_bytes[file_off..file_off + len].to_vec());
+            }
+        }
+    }
+    Err(())
 }
 
 /// Build the tunneled `0x06 ‖ payload` command (opcode prepended; payload is raw module body).

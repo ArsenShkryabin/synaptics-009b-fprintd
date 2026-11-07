@@ -9,6 +9,7 @@
 //!   synfp modes                # capture modes + arm recipe for this silicon         (no session)
 //!   synfp flash 1 --size 4096  # dump a flash partition region                       (no session)
 //!   synfp fwext                # firmware blobs present on device vs wanted/missing   (no session)
+//!   synfp pair --probe         # read-only provisioning status + flash table         (no session)
 //!   synfp db                   # enumerate the on-chip template DB                    (session)
 //!   synfp png -o f.png         # record an image; --finger to wait for a touch       (session)
 //! ```
@@ -84,6 +85,8 @@ enum Command {
     Flash(FlashArgs),
     /// Firmware blobs present on the device vs. wanted (ROM-exit / pre-arm / WOF) and missing. No session.
     Fwext,
+    /// Read-only provisioning probe: status flags + flash table. No TLS, no 0x06, no 0x4f.
+    Pair(PairArgs),
     /// Enumerate the on-chip template DB (StgWindsor container → users → fingers). Opens a session.
     Db,
     /// Record an image to PNG. Opens a session, arms a capture, polls a frame. See `--finger`.
@@ -118,6 +121,13 @@ struct FlashArgs {
     /// Write raw bytes to this file instead of hex-dumping to stdout.
     #[arg(short, long)]
     out: Option<String>,
+}
+
+#[derive(Args)]
+struct PairArgs {
+    /// Run the safe, read-only provisioning probe. Fresh pairing itself is not implemented.
+    #[arg(long)]
+    probe: bool,
 }
 
 #[derive(Args)]
@@ -213,6 +223,7 @@ fn main() -> Result<()> {
         Command::Modes => cmd_modes(),
         Command::Flash(a) => cmd_flash(a),
         Command::Fwext => cmd_fwext(),
+        Command::Pair(a) => cmd_pair(a),
         Command::Db => cmd_db(&cli),
         Command::Png(a) => cmd_png(&cli, a),
         Command::Reboot => cmd_reboot(&cli),
@@ -302,6 +313,80 @@ fn cmd_info() -> Result<()> {
         }
         None => println!("imaging: no capture program resolves for this silicon"),
     }
+    Ok(())
+}
+
+/// Safe, read-only fresh-pairing probe.
+///
+/// Sends only the pre-TLS `0x01` status read and the `0x3e` flash-table read,
+/// the same commands `synfp info` already uses. It deliberately does NOT open a
+/// TLS session, send `0x06` init payloads, or touch `0x4f` (destructive on an
+/// unprovisioned die). The goal is to learn what the sensor reports about its
+/// own provisioning state before any write path is designed.
+fn cmd_pair(a: &PairArgs) -> Result<()> {
+    if !a.probe {
+        return Err(Error::Malformed(
+            "fresh pairing is not implemented; only `synfp pair --probe` is available".into(),
+        ));
+    }
+
+    let (mut dev, (vid, pid)) = RawDevice::open_any()?;
+    println!("# read-only provisioning probe: 0x01 status + 0x3e flash table");
+    println!("# no TLS session, no 0x06 init, no 0x4f partition write");
+    println!("device: {vid:04x}:{pid:04x}");
+
+    let status = dev.read_sensor_status()?;
+    println!(
+        "status: valid={} device_id=0x{:02x} flags17=0x{:02x}",
+        status.valid, status.device_id, status.flags17
+    );
+    println!(
+        "  reported_provisioned={} has_flash_bit={} provision_state={}",
+        status.is_provisioned(),
+        status.flags17 & 0x40 != 0,
+        status.provision_state(),
+    );
+    println!(
+        "  format_mode={} key_08=0x{:02x} key_09=0x{:02x} key_0f=0x{:02x}",
+        status.format_mode, status.key_08, status.key_09, status.key_0f
+    );
+    println!(
+        "  payload[{}]={}",
+        status.payload.len(),
+        status
+            .payload
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+    );
+    if status.format_mode {
+        println!("# WARNING: bit 0x40 is clear, so the vendor format/wipe gate is armed");
+        println!("# on this pre-TLS read. The DLL reads this byte after firmware init, so");
+        println!("# a cold ROM-mode value is not a licence to run vendor init. Nothing was");
+        println!("# written by this probe.");
+    }
+
+    match dev.get_flash_info() {
+        Ok(fi) => {
+            println!(
+                "flash: jedec={:04x}:{:04x} blocks=0x{:x}×0x{:x} partitions={}",
+                fi.jedec.0,
+                fi.jedec.1,
+                fi.blocks,
+                fi.block_size,
+                fi.partitions.len()
+            );
+            for p in &fi.partitions {
+                println!(
+                    "  part id={:#04x} type={:#04x} flags={:#06x} addr={:#010x} size={:#010x}",
+                    p.id, p.type_, p.flags, p.addr, p.size
+                );
+            }
+        }
+        Err(e) => println!("flash: ERROR {e}"),
+    }
+
+    println!("# probe complete; no pairing material was read or changed");
     Ok(())
 }
 

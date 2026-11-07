@@ -38,7 +38,9 @@ if [ -n "$MISSING_PKGS" ]; then
   fi
 fi
 
-mkdir -p windows-driver synaptics-prometheus-qm/data /etc/synaptics /var/lib/fprint/synaptics
+mkdir -p windows-driver synaptics-prometheus-qm/data
+install -d -m 700 /etc/synaptics
+install -d -m 700 /var/lib/fprint/synaptics
 
 echo "=== 2. Acquiring Synaptics driver DLL ==="
 if [ ! -f "windows-driver/synaWudfBioUsb.dll" ]; then
@@ -65,13 +67,20 @@ if [ ! -f "windows-driver/synaWudfBioUsb.dll" ]; then
   if [ ! -f "windows-driver/synaWudfBioUsb.dll" ]; then
     echo "Downloading official driver CAB from Microsoft Update Catalog..."
     MS_URL="https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2022/02/5f113717-0077-472e-898b-776e2d10ba50_f1b188172ca2e951ff68896deaa7af9d3544168e.cab"
-    curl -s -L "$MS_URL" -o /tmp/syna_driver.cab
+    CAB_SHA256="35866f5ef98d1cf14a621aee91895dd2be4fb534cb9722243e5b8254373c87c7"
+    TMP_CAB="$(mktemp)"
+    curl -fsSL "$MS_URL" -o "$TMP_CAB"
+    echo "${CAB_SHA256}  ${TMP_CAB}" | sha256sum -c - >/dev/null || {
+      echo "Error: Downloaded CAB failed SHA-256 verification" >&2
+      rm -f "$TMP_CAB"
+      exit 1
+    }
     if command -v 7z >/dev/null 2>&1; then
-      7z e -y /tmp/syna_driver.cab -o"windows-driver/" synaWudfBioUsb.dll >/dev/null
+      7z e -y "$TMP_CAB" -o"windows-driver/" synaWudfBioUsb.dll >/dev/null
     elif command -v cabextract >/dev/null 2>&1; then
-      cabextract -q -F synaWudfBioUsb.dll -d windows-driver/ /tmp/syna_driver.cab
+      cabextract -q -F synaWudfBioUsb.dll -d windows-driver/ "$TMP_CAB"
     fi
-    rm -f /tmp/syna_driver.cab
+    rm -f "$TMP_CAB"
   fi
 fi
 
@@ -80,56 +89,47 @@ if [ ! -f "windows-driver/synaWudfBioUsb.dll" ]; then
   exit 1
 fi
 
+DLL_SHA256="ab56871c7bf83841719b3ae90e8bfdc646bf0f0fd01e49f1b83bdded17d3bf7b"
+echo "${DLL_SHA256}  windows-driver/synaWudfBioUsb.dll" | sha256sum -c - >/dev/null || {
+  echo "Error: windows-driver/synaWudfBioUsb.dll failed SHA-256 verification" >&2
+  exit 1
+}
+
 echo "=== 3. Extracting neural model weights and firmware modules ==="
 python3 tools/extract_qm_models.py windows-driver/synaWudfBioUsb.dll synaptics-prometheus-qm/data/
 python3 tools/extract_fw_modules.py --dll windows-driver/synaWudfBioUsb.dll
 
-echo "=== 4. Setting up pairing certificate ==="
-if [ ! -f "/etc/synaptics/certstore.bin" ]; then
-  if [ -f "certstore.bin" ]; then
-    cp certstore.bin /etc/synaptics/certstore.bin
-  else
-    # Try extracting from Windows registry
-    python3 -c "
-import hivex, os, glob
-found = False
-for part in glob.glob('/dev/nvme*p*') + glob.glob('/dev/sd*'):
-    mnt = '/tmp/win_mnt'
-    os.makedirs(mnt, exist_ok=True)
-    if os.system(f'mount -o ro {part} {mnt} 2>/dev/null') == 0:
-        reg = f'{mnt}/Windows/System32/config/SYSTEM'
-        if os.path.exists(reg):
-            try:
-                h = hivex.Hivex(reg)
-                def walk(node):
-                    global found
-                    for val in h.node_values(node):
-                        if h.value_key(val) == 'PairingData':
-                            with open('/etc/synaptics/certstore.bin', 'wb') as f:
-                                f.write(h.value_value(val)[1])
-                            found = True
-                            return
-                    for c in h.node_children(node):
-                        walk(c)
-                        if found: return
-                walk(h.root())
-            except Exception: pass
-        os.system(f'umount {mnt} 2>/dev/null')
-        if found: break
-" 2>/dev/null || true
-  fi
-fi
-
-if [ -f "/etc/synaptics/certstore.bin" ]; then
-  chmod 600 /etc/synaptics/certstore.bin
-  echo "Pairing certstore installed at /etc/synaptics/certstore.bin"
-fi
-
-echo "=== 5. Compiling syna-tool (release build) ==="
+echo "=== 4. Compiling syna-tool (release build) ==="
 cargo build --release --bin syna-tool
 install -m 755 target/release/syna-tool /usr/local/bin/syna-tool
 
-echo "=== 6. Installing D-Bus service, udev rules and PAM configs ==="
+echo "=== 5. Installing firmware modules and assets ==="
+install -d -m 755 /usr/share/synaptics/fw_modules
+install -m 644 synaptics-prometheus/data/fw_modules/*.bin /usr/share/synaptics/fw_modules/
+install -m 644 windows-driver/synaWudfBioUsb.dll /usr/share/synaptics/synaWudfBioUsb.dll
+
+echo "=== 6. Setting up pairing certificate ==="
+if [ -f "/etc/synaptics/certstore.bin" ]; then
+  chmod 600 /etc/synaptics/certstore.bin
+  chmod 700 /etc/synaptics
+  echo "Using existing pairing certstore at /etc/synaptics/certstore.bin"
+elif [ -f "certstore.bin" ]; then
+  cp certstore.bin /etc/synaptics/certstore.bin
+  chmod 600 /etc/synaptics/certstore.bin
+  chmod 700 /etc/synaptics
+  echo "Copied local certstore.bin to /etc/synaptics/certstore.bin"
+else
+  echo "No existing certstore found. Pairing with 06cb:009b sensor directly over USB..."
+  /usr/local/bin/syna-tool pair /etc/synaptics/certstore.bin
+  chmod 600 /etc/synaptics/certstore.bin
+  chmod 700 /etc/synaptics
+fi
+
+# Existing template stores may predate the private-permission rule.
+find /var/lib/fprint/synaptics -type d -exec chmod 700 {} + 2>/dev/null || true
+find /var/lib/fprint/synaptics -type f -exec chmod 600 {} + 2>/dev/null || true
+
+echo "=== 7. Installing D-Bus service, udev rules and PAM configs ==="
 install -m 755 daemon/syna-fprintd /usr/local/bin/syna-fprintd
 install -m 644 daemon/fprintd.service /etc/systemd/system/fprintd.service
 install -m 644 daemon/70-synaptics-fingerprint.rules /etc/udev/rules.d/70-synaptics-fingerprint.rules
@@ -151,7 +151,7 @@ if [ -f "/etc/pam.d/polkit-1" ] && ! grep -q "pam_fprintd.so" /etc/pam.d/polkit-
   sed -i '1i auth sufficient pam_fprintd.so' /etc/pam.d/polkit-1
 fi
 
-echo "=== 7. Reloading system services ==="
+echo "=== 8. Reloading system services ==="
 udevadm control --reload-rules && udevadm trigger
 systemctl daemon-reload
 systemctl enable --now fprintd.service

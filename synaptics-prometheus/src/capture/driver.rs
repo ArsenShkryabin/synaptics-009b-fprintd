@@ -513,7 +513,7 @@ impl<'s, T: Transport> CaptureSession<'s, T> {
             capturer.capture_one(self.session, &bytes, opts.pre_arm)?
         };
         let arm_status = raw.arm_status;
-        if !matches!(arm_status, 0x0000 | 0x0412 | 0x0450) {
+        if !matches!(arm_status, 0x0000 | 0x0412) {
             log::warn!(
                 "capture: {:?} arm rejected status={}",
                 opts.read,

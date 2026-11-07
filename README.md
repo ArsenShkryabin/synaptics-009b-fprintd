@@ -41,8 +41,10 @@ This project provides an autonomous, production-ready Linux driver stack:
 - **System D-Bus Daemon (`syna-fprintd`):** Drop-in replacement for `fprintd.service` implementing standard `net.reactivated.Fprint.Manager` and `net.reactivated.Fprint.Device` interfaces.
 - **Robust Hardware Recovery:** 3-second bounded timeouts for USB control commands, automatic fallback to electrical port reset on stalls, and graceful `SIGTERM`/`SIGINT` handling that disarms the sensor cleanly.
 - **System Integration:** Fully compatible with standard Linux utilities (`fprintd-enroll`, `fprintd-verify`, `fprintd-list`), `pam_fprintd.so` for `sudo`, Polkit, SDDM, and Hyprland/GNOME/KDE lock screens.
-- **No Windows Required:** Automatically downloads the official 1.2 MB driver package directly from Microsoft Update Catalog to extract neural model weights.
-- **Non-Destructive Pairing:** Preserves existing pairing data, so Windows Hello continues to work in dual-boot setups.
+- **100% Linux Native Pairing:** Pairs directly with the sensor over USB (`syna-tool pair`), generating the required 4096-byte certificate store with zero dependencies on Windows or Windows Hello.
+- **Non-Destructive Dual-Boot:** Preserves existing pairing data, so Windows Hello continues to work without conflict in dual-boot setups.
+- **Security-First Authorization:** Enforces strict caller UID validation over D-Bus; normal users can only access their own biometric templates while `root` retains system authorization for `sudo` and lock screens. Templates and pairing keys are stored with private `0600`/`0700` permissions.
+- **Desktop & GUI Ready:** Full compatibility with GNOME Control Center and KDE System Settings, including modern `DeleteEnrolledFingers2()` support, clean non-intrusive cancellation without spurious error toasts, `scan-type: "press"` UI animations, and standard D-Bus introspection properties.
 
 ---
 
@@ -64,10 +66,10 @@ sudo ./install.sh
 ```
 
 The installer will:
-1. Download the official 1.2 MB driver CAB from Microsoft Update Catalog and extract neural model weights (`metviper_*.bin`).
-2. Locate or configure the sensor pairing material.
+1. Download the official 1.2 MB driver CAB from Microsoft Update Catalog and extract neural model weights (`metviper_*.bin`) and all 75 firmware modules.
+2. Pair directly with the sensor over USB (`syna-tool pair`) to generate `/etc/synaptics/certstore.bin` if not already present.
 3. Compile `syna-tool` in release mode.
-4. Install `syna-fprintd`, systemd service drop-in, udev rules, sleep hook, and PAM configurations.
+4. Install `syna-fprintd`, firmware assets to `/usr/share/synaptics/`, systemd service drop-in, udev rules, sleep hook, and PAM configurations.
 5. Enable and start the service.
 
 ---
@@ -100,6 +102,12 @@ Verify result: verify-match (done)
 fprintd-list $USER
 ```
 
+### 4. Inspect stored biometric templates (offline diagnostic):
+```bash
+syna-tool inspect $(id -u)
+```
+Displays minutiae counts, quality ratings, and sub-views stored in your template files without opening the sensor.
+
 ---
 
 ## 🔒 PAM & Lock Screen Configuration
@@ -114,36 +122,16 @@ fprintd-list $USER
 ## ❓ Troubleshooting & FAQ
 
 <details>
-<summary><b>1. "PairingData" not found / Pairing Error</b></summary>
+<summary><b>1. Pairing or generating /etc/synaptics/certstore.bin manually</b></summary>
 
-If you have a dual-boot Windows installation on the same machine, pairing can be extracted non-destructively:
+The installer automatically pairs with your sensor. If you ever need to generate or re-pair manually:
 ```bash
-# Ensure hivex and python-hivex are installed, then run:
-sudo python3 -c '
-import hivex, os, glob
-for part in glob.glob("/dev/nvme*p*") + glob.glob("/dev/sd*"):
-    mnt = "/tmp/win_mnt"
-    os.makedirs(mnt, exist_ok=True)
-    if os.system(f"mount -o ro {part} {mnt} 2>/dev/null") == 0:
-        reg = f"{mnt}/Windows/System32/config/SYSTEM"
-        if os.path.exists(reg):
-            try:
-                h = hivex.Hivex(reg)
-                def walk(node):
-                    for val in h.node_values(node):
-                        if h.value_key(val) == "PairingData":
-                            os.makedirs("/etc/synaptics", exist_ok=True)
-                            with open("/etc/synaptics/certstore.bin", "wb") as f:
-                                f.write(h.value_value(val)[1])
-                            print("Found and extracted PairingData!")
-                            return True
-                    for c in h.node_children(node):
-                        if walk(c): return True
-                walk(h.root())
-            except Exception: pass
-        os.system(f"umount {mnt} 2>/dev/null")
-'
-sudo chmod 600 /etc/synaptics/certstore.bin
+sudo syna-tool pair /etc/synaptics/certstore.bin
+sudo systemctl restart fprintd
+```
+If you have an existing dual-boot Windows installation and wish to keep using your existing pairing material:
+```bash
+sudo syna-tool pair /etc/synaptics/certstore.bin --reuse-existing
 sudo systemctl restart fprintd
 ```
 </details>

@@ -240,7 +240,11 @@ fn all_match_counts_weak(stats: &[AnchorStats]) -> bool {
     !stats.is_empty() && stats.iter().all(|s| s.match_count <= 3)
 }
 
+/// Anchor ranking inside `syna_qm_score_features@0x1800088d0` (`qsort` comparator `@0x1800088a0`):
+/// primary key is `work[+0x68]` (`compare.hamming_mean`, ascending; `0x7fff` sentinel when empty),
+/// secondary key is `work[+0x60]` (`match_count`, descending).
 fn sort_anchor_order(stats: &[AnchorStats]) -> Vec<usize> {
+    let hamming_mean = |s: &AnchorStats| s.compare.as_ref().map_or(0x7fff, |c| c.hamming_mean);
     let mut order: Vec<usize> = stats
         .iter()
         .enumerate()
@@ -248,9 +252,9 @@ fn sort_anchor_order(stats: &[AnchorStats]) -> Vec<usize> {
         .map(|(i, _)| i)
         .collect();
     order.sort_by(|&a, &b| {
-        stats[b]
-            .match_count
-            .cmp(&stats[a].match_count)
+        hamming_mean(&stats[a])
+            .cmp(&hamming_mean(&stats[b]))
+            .then(stats[b].match_count.cmp(&stats[a].match_count))
             .then(stats[a].avg_dist.cmp(&stats[b].avg_dist))
     });
     order
@@ -448,7 +452,10 @@ pub fn diagnose_prepared_gated(
     };
 
     let anchor_order = sort_anchor_order(&stats_vec);
-    let decision = (consensus.found && score > threshold) || (score >= threshold) || (consensus.found && score >= 800);
+    // Exact decision rule in `syna_qm_match_core@0x180100620` (`0x1801015a2`:
+    // `cmp DWORD PTR [rax+0x4], ecx; jbe ...; mov DWORD PTR [rax+0x8], 1`).
+    // `consensus.found` sets `result->strong_flag` (`+0x0c`, `0x1801014dc`), not `decision`.
+    let decision = score > threshold;
 
     let mut diag_anchors = Vec::with_capacity(probe.minutiae.len());
     for (pi, p) in probe.minutiae.iter().enumerate() {
@@ -645,8 +652,47 @@ mod tests {
             false,
         );
         let feats = wr.score_features();
-        assert_eq!(feats[5], 21);
+        assert_eq!(feats[5], 42 - 21);
         assert_eq!(feats[6], 8);
+    }
+
+    #[test]
+    fn sort_anchor_order_ranks_by_hamming_mean_asc_then_match_count_desc() {
+        let mk = |match_count: i32, avg_dist: i32, hamming_mean: Option<i32>| AnchorStats {
+            avg_dist,
+            match_count,
+            xf: SimilarityQ16 {
+                cos: XFORM_FIXED_ONE,
+                sin: 0,
+                tx: 0,
+                ty: 0,
+            },
+            is_anchor: match_count >= MIN_MATCHED_NEIGHBORS,
+            strong: false,
+            compare: hamming_mean.map(|hm| CompareRecord {
+                hamming_mean: hm,
+                hamming_median: hm,
+                coverage_scalar: 0x7fff,
+                coverage_buckets: [0, 0, 0, 0, 0x7fff],
+                match_count: 10,
+                reject_count: 0,
+                angle_avg_all: 0x7fff,
+                angle_avg_class0: 0x7fff,
+                angle_count: 10,
+            }),
+        };
+        let stats = vec![
+            // Slot 0: high RANSAC match_count (25) & low local avg_dist (10), but poor global hamming_mean (40)
+            mk(25, 10, Some(40)),
+            // Slot 1: empty compare record (sentinel 0x7fff) — must sort last among anchors
+            mk(25, 5, Some(0x7fff)),
+            // Slot 2: good global hamming_mean (12), lower match_count (15)
+            mk(15, 20, Some(12)),
+            // Slot 3: same global hamming_mean (12), higher match_count (25) — must win
+            mk(25, 20, Some(12)),
+        ];
+        let order = sort_anchor_order(&stats);
+        assert_eq!(order, vec![3, 2, 0, 1]);
     }
 }
 

@@ -1,7 +1,7 @@
 # Maintainer: Arsen Shkryabin <ArsenShkryabin@users.noreply.github.com>
 pkgname=synaptics-009b-fprintd-git
 _pkgname=synaptics-009b-fprintd
-pkgver=0.1.1.r2.gd8e4652
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Linux driver & drop-in fprintd D-Bus service for Synaptics 06cb:009b (MSI SecurePad)"
 arch=('x86_64')
@@ -19,9 +19,6 @@ makedepends=(
     'rust'
     'git'
     '7zip'
-)
-optdepends=(
-    'hivex: automatic pairing certificate extraction from Windows partition'
 )
 provides=('synaptics-009b-fprintd')
 conflicts=('synaptics-009b-fprintd')
@@ -45,6 +42,7 @@ prepare() {
     cd "${srcdir}/${_pkgname}"
     mkdir -p windows-driver synaptics-prometheus-qm/data
     7z e -y "${srcdir}/syna_driver.cab" -o"windows-driver/" synaWudfBioUsb.dll >/dev/null
+    echo "ab56871c7bf83841719b3ae90e8bfdc646bf0f0fd01e49f1b83bdded17d3bf7b  windows-driver/synaWudfBioUsb.dll" | sha256sum -c -
     python3 tools/extract_qm_models.py windows-driver/synaWudfBioUsb.dll synaptics-prometheus-qm/data/
     python3 tools/extract_fw_modules.py --dll windows-driver/synaWudfBioUsb.dll
 }
@@ -60,6 +58,11 @@ package() {
     # Binaries
     install -Dm755 "target/release/syna-tool" "${pkgdir}/usr/bin/syna-tool"
     install -Dm755 "daemon/syna-fprintd" "${pkgdir}/usr/bin/syna-fprintd"
+
+    # Firmware modules and assets
+    install -d "${pkgdir}/usr/share/synaptics/fw_modules"
+    install -Dm644 synaptics-prometheus/data/fw_modules/*.bin "${pkgdir}/usr/share/synaptics/fw_modules/"
+    install -Dm644 windows-driver/synaWudfBioUsb.dll "${pkgdir}/usr/share/synaptics/synaWudfBioUsb.dll"
 
     # Systemd drop-in override for fprintd.service
     install -d "${pkgdir}/usr/lib/systemd/system/fprintd.service.d"

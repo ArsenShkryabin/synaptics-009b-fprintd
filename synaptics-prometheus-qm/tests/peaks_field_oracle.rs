@@ -11,15 +11,28 @@
 //! Per AGENTS.md #7 this is a fixed diagnostic vector, not a fingerprint claim. Empty / near-empty
 //! peak lists under thr1 on this fixture are a valid outcome — do not flip crate defaults here.
 
+use std::path::Path;
 use synaptics_prometheus_qm::extractor::{
     detect_peaks_in_tiles, doh_response_tiles, DetectParams,
 };
 
-const IMAGE: &[u8] = include_bytes!("../../tools/qm-dll-oracle/fixtures/qmflip_0000.u8");
-const GOLDEN: &str = include_str!("../../tools/qm-dll-oracle/golden/peaks_field.txt");
-
 const W: usize = 144;
 const H: usize = 56;
+
+fn load_fixture_and_golden() -> Option<(Vec<u8>, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tools/qm-dll-oracle");
+    let img_path = root.join("fixtures/qmflip_0000.u8");
+    let gld_path = root.join("golden/peaks_field.txt");
+    let Ok(image) = std::fs::read(&img_path) else {
+        eprintln!("skipping peaks_field_oracle test: missing {}", img_path.display());
+        return None;
+    };
+    let Ok(golden) = std::fs::read_to_string(&gld_path) else {
+        eprintln!("skipping peaks_field_oracle test: missing {}", gld_path.display());
+        return None;
+    };
+    Some((image, golden))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PeakRec {
@@ -30,8 +43,8 @@ struct PeakRec {
     tile: u8,
 }
 
-fn golden_peaks() -> Vec<PeakRec> {
-    GOLDEN
+fn golden_peaks(golden: &str) -> Vec<PeakRec> {
+    golden
         .lines()
         .filter_map(|l| {
             let rest = l.strip_prefix("PEAKSFIELD_PEAK ")?;
@@ -65,8 +78,8 @@ fn golden_peaks() -> Vec<PeakRec> {
         .collect()
 }
 
-fn golden_count() -> usize {
-    GOLDEN
+fn golden_count(golden: &str) -> usize {
+    golden
         .lines()
         .find_map(|l| l.strip_prefix("PEAKSFIELD_COUNT ")?.parse().ok())
         .expect("PEAKSFIELD_COUNT")
@@ -74,8 +87,11 @@ fn golden_count() -> usize {
 
 #[test]
 fn fixture_matches_peaks_field_input_hash() {
-    assert_eq!(IMAGE.len(), W * H);
-    let want = GOLDEN
+    let Some((image, golden)) = load_fixture_and_golden() else {
+        return;
+    };
+    assert_eq!(image.len(), W * H);
+    let want = golden
         .lines()
         .find_map(|l| {
             l.strip_prefix("PEAKSFIELD_INPUT ")?
@@ -88,18 +104,21 @@ fn fixture_matches_peaks_field_input_hash() {
     let want = u64::from_str_radix(want, 16).unwrap();
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let got = IMAGE.iter().fold(OFFSET, |h, &b| (h ^ u64::from(b)).wrapping_mul(PRIME));
+    let got = image.iter().fold(OFFSET, |h, &b| (h ^ u64::from(b)).wrapping_mul(PRIME));
     assert_eq!(got, want);
 }
 
 #[test]
 fn peaks_field_matches_oracle_golden() {
+    let Some((image, golden)) = load_fixture_and_golden() else {
+        return;
+    };
     let params = DetectParams::dll_baseline(0x2449);
     assert_eq!(params.nms_max_out, 125);
     assert_eq!(params.nms_margin, 10);
     assert_eq!(params.tiles, 3);
 
-    let tiles = doh_response_tiles(IMAGE, W, H, &params);
+    let tiles = doh_response_tiles(&image, W, H, &params);
     assert_eq!(tiles.len(), 9);
     let cands = detect_peaks_in_tiles(&tiles, W, H, &params);
     let got: Vec<PeakRec> = cands
@@ -112,8 +131,8 @@ fn peaks_field_matches_oracle_golden() {
             tile: c.tile,
         })
         .collect();
-    let want = golden_peaks();
-    assert_eq!(got.len(), golden_count(), "peak count vs PEAKSFIELD_COUNT");
+    let want = golden_peaks(&golden);
+    assert_eq!(got.len(), golden_count(&golden), "peak count vs PEAKSFIELD_COUNT");
     assert_eq!(
         got, want,
         "peak list differs from DLL oracle (composition: 3×3 DoH→NMS→refine→border→cap)"

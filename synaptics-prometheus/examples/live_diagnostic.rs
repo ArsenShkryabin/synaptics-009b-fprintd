@@ -71,8 +71,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Ok(probe) => {
                                 match backend.verify(&probe, &enrolled_blob, MatchLevel::Level1) {
                                     Ok(res) => {
-                                        println!("    --> Сверка: anchors={} score={}/{} matched={}",
-                                            res.anchor_count, res.score, res.threshold, res.matched);
+                                        let strict =
+                                            res.consensus_ok && res.score > res.threshold;
+                                        println!(
+                                            "    --> Сверка: anchors={} score={}/{} consensus={} strict={} matched={}",
+                                            res.anchor_count,
+                                            res.score,
+                                            res.threshold,
+                                            res.consensus_ok,
+                                            strict,
+                                            res.matched
+                                        );
                                         if res.matched {
                                             println!("\n★ ПОЛНЫЙ УСПЕХ! Отпечаток совпал, разблокировка РАБОТАЕТ!");
                                             let _ = capture.finish();

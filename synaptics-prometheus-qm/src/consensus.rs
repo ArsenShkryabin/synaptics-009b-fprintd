@@ -150,11 +150,105 @@ pub struct Consensus {
     pub peak: u8,
 }
 
-/// Geometric-consensus gate with peak-selection refinement.
+/// Add the untransformed `w×h` reference footprint (`+1` per 8-px sample bin) to `grid`.
+/// Bit-exact port of `syna_qm_vote_grid_add_reference@0x18000c0f0`.
+pub fn vote_grid_add_reference(grid: &mut VoteGrid, w: i32, h: i32) {
+    let x0 = VOTE_GRID_CENTER - (w / 2) / VOTE_TRANSLATION_BIN_PX;
+    let y0 = VOTE_GRID_CENTER - (h / 2) / VOTE_TRANSLATION_BIN_PX;
+    let mut sy = 0;
+    while sy < h {
+        let bin_y = y0 + sy / VOTE_TRANSLATION_BIN_PX;
+        if (bin_y as u32) < VOTE_GRID_SIDE as u32 {
+            let mut sx = 0;
+            while sx < w {
+                let bin_x = x0 + (sx >> 3);
+                if (bin_x as u32) < VOTE_GRID_SIDE as u32 {
+                    let idx = VoteGrid::idx(bin_x, bin_y);
+                    grid.cells[idx] = grid.cells[idx].wrapping_add(1);
+                }
+                sx += VOTE_TRANSLATION_BIN_PX;
+            }
+        }
+        sy += VOTE_TRANSLATION_BIN_PX;
+    }
+}
+
+/// Leave-one-out vote removal for one transform: decrement each 8-px sample's landing bin in `grid`
+/// and append the touched linear cell index to `recorded`.
+/// Bit-exact port of `syna_qm_apply_transform_vote@0x18000c1c0`.
+pub fn apply_transform_vote(
+    grid: &mut VoteGrid,
+    xf: &SynaQmXformRecord,
+    w: i32,
+    h: i32,
+    recorded: &mut Vec<usize>,
+) {
+    recorded.clear();
+    let x0 = VOTE_GRID_CENTER - (w / 2) / VOTE_TRANSLATION_BIN_PX;
+    let y0 = VOTE_GRID_CENTER - (h / 2) / VOTE_TRANSLATION_BIN_PX;
+    let mut sy = 0;
+    while sy < h {
+        let mut sx = 0;
+        while sx < w {
+            let (xp, yp) = apply_xform_q16(sx, sy, xf);
+            let bin_x = x0 + xp / VOTE_TRANSLATION_BIN_PX;
+            let bin_y = y0 + yp / VOTE_TRANSLATION_BIN_PX;
+            if (bin_x as u32) < VOTE_GRID_SIDE as u32 && (bin_y as u32) < VOTE_GRID_SIDE as u32 {
+                let idx = VoteGrid::idx(bin_x, bin_y);
+                grid.cells[idx] = grid.cells[idx].wrapping_sub(1);
+                recorded.push(idx);
+            }
+            sx += VOTE_TRANSLATION_BIN_PX;
+        }
+        sy += VOTE_TRANSLATION_BIN_PX;
+    }
+}
+
+/// Restore votes removed by [`apply_transform_vote`].
+/// Bit-exact port of `syna_qm_accumulate_votes@0x18000c430`.
+pub fn accumulate_votes(grid: &mut VoteGrid, recorded: &[usize]) {
+    for &idx in recorded {
+        grid.cells[idx] = grid.cells[idx].wrapping_add(1);
+    }
+}
+
+/// Select the winning transform index by leave-one-out occupancy (`o >= best`, seeded with `occ0`).
+/// Bit-exact port of the leave-one-out loop in `syna_qm_consensus_pick_transform@0x18000c460`.
+pub fn consensus_pick_transform_gated(
+    grid: &mut VoteGrid,
+    occ0: usize,
+    xforms: &[SynaQmXformRecord],
+    w: i32,
+    h: i32,
+    gate: VoteGate,
+) -> Option<usize> {
+    let mut winning = None;
+    let mut best = occ0;
+    let mut recorded = Vec::new();
+    for (m, xf) in xforms.iter().enumerate() {
+        let votes = match gate {
+            VoteGate::Translation => xf.tx != 0 || xf.ty != 0,
+            VoteGate::ValidFlag => xf.valid_flag != 0,
+        };
+        if !votes {
+            continue;
+        }
+        apply_transform_vote(grid, xf, w, h, &mut recorded);
+        let o = count_occupied(grid);
+        accumulate_votes(grid, &recorded);
+        if o >= best {
+            best = o;
+            winning = Some(m);
+        }
+    }
+    winning
+}
+
+/// Geometric-consensus gate with leave-one-out transform selection.
 ///
-/// Ports `syna_qm_geometric_consensus@0x18000c5f0` structure:
-/// vote grid build, occupancy/peak measurement, and `syna_qm_consensus_pick_transform@0x18000c460`
-/// peak selection (simplified to max-peak bin when refinement helpers are unavailable).
+/// Ports `syna_qm_geometric_consensus@0x18000c5f0`:
+/// `vote_grid_build` (`0x18000bf20`) → `occ0 = count_occupied` (`0x18000c190`) →
+/// `vote_grid_add_reference` (`0x18000c0f0`) → `consensus_pick_transform` (`0x18000c460`).
 pub fn geometric_consensus_pick(
     xforms: &[SynaQmXformRecord],
     w: i32,
@@ -176,9 +270,14 @@ pub fn geometric_consensus_pick_gated(
     let any_valid = vote_grid_build_gated(&mut grid, xforms, w, h, gate);
     let occupied = count_occupied(&grid);
     let peak = peak_support(&grid);
-    let found = any_valid && peak >= 2 && pick_transform_support(&grid, peak);
+    vote_grid_add_reference(&mut grid, w, h);
+    let winning = if any_valid && peak >= 2 {
+        consensus_pick_transform_gated(&mut grid, occupied, xforms, w, h, gate)
+    } else {
+        None
+    };
     Consensus {
-        found,
+        found: winning.is_some(),
         occupied,
         peak,
     }
@@ -200,11 +299,6 @@ pub fn geometric_consensus(
         occupied,
         peak,
     }
-}
-
-/// Whether the peak bin has sufficient support — stand-in for full finalize graph scoring.
-fn pick_transform_support(grid: &VoteGrid, peak: u8) -> bool {
-    peak >= 2 && grid.cells.contains(&peak)
 }
 
 #[cfg(test)]
@@ -294,5 +388,22 @@ mod tests {
         let c = geometric_consensus(&[translation(5 << 16, 7 << 16), translation(5 << 16, 7 << 16)], 40, 24, 2);
         assert!(c.found);
         assert_eq!(c.peak, 2);
+    }
+
+    #[test]
+    fn leave_one_out_pick_transform_restores_grid_and_selects_winner() {
+        let xforms = [
+            translation(5 << 16, 7 << 16),
+            translation(5 << 16, 7 << 16),
+            translation(13 << 16, -6 << 16),
+        ];
+        let mut grid = VoteGrid::default();
+        assert!(vote_grid_build(&mut grid, &xforms, 40, 24));
+        let occ0 = count_occupied(&grid);
+        vote_grid_add_reference(&mut grid, 40, 24);
+        let snap = *grid.cells;
+        let win = consensus_pick_transform_gated(&mut grid, occ0, &xforms, 40, 24, VoteGate::Translation);
+        assert!(win.is_some());
+        assert_eq!(*grid.cells, snap, "leave-one-out probe must restore grid exactly");
     }
 }
