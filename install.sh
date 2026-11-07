@@ -99,72 +99,37 @@ echo "=== 3. Extracting neural model weights and firmware modules ==="
 python3 tools/extract_qm_models.py windows-driver/synaWudfBioUsb.dll synaptics-prometheus-qm/data/
 python3 tools/extract_fw_modules.py --dll windows-driver/synaWudfBioUsb.dll
 
-echo "=== 4. Setting up pairing certificate ==="
-if [ ! -f "/etc/synaptics/certstore.bin" ]; then
-  if [ -f "certstore.bin" ]; then
-    cp certstore.bin /etc/synaptics/certstore.bin
-  else
-    # Try extracting from Windows registry
-    python3 -c "
-import hivex, os, glob, subprocess, tempfile
-found = False
-mnt = tempfile.mkdtemp(prefix='syna_win_')
-try:
-    for part in glob.glob('/dev/nvme*p*') + glob.glob('/dev/sd*'):
-        if subprocess.run(['mount', '-o', 'ro', part, mnt], stderr=subprocess.DEVNULL).returncode == 0:
-            try:
-                reg = f'{mnt}/Windows/System32/config/SYSTEM'
-                if os.path.exists(reg):
-                    h = hivex.Hivex(reg)
-                    def walk(node):
-                        global found
-                        for val in h.node_values(node):
-                            if h.value_key(val) == 'PairingData':
-                                with open('/etc/synaptics/certstore.bin', 'wb') as f:
-                                    f.write(h.value_value(val)[1])
-                                found = True
-                                return
-                        for c in h.node_children(node):
-                            walk(c)
-                            if found: return
-                    walk(h.root())
-            except Exception:
-                pass
-            subprocess.run(['umount', mnt], stderr=subprocess.DEVNULL)
-            if found:
-                break
-finally:
-    try:
-        os.rmdir(mnt)
-    except Exception:
-        pass
-" 2>/dev/null || true
-  fi
-fi
+echo "=== 4. Compiling syna-tool (release build) ==="
+cargo build --release --bin syna-tool
+install -m 755 target/release/syna-tool /usr/local/bin/syna-tool
 
+echo "=== 5. Installing firmware modules and assets ==="
+install -d -m 755 /usr/share/synaptics/fw_modules
+install -m 644 synaptics-prometheus/data/fw_modules/*.bin /usr/share/synaptics/fw_modules/
+install -m 644 windows-driver/synaWudfBioUsb.dll /usr/share/synaptics/synaWudfBioUsb.dll
+
+echo "=== 6. Setting up pairing certificate ==="
 if [ -f "/etc/synaptics/certstore.bin" ]; then
   chmod 600 /etc/synaptics/certstore.bin
   chmod 700 /etc/synaptics
-  echo "Pairing certstore installed at /etc/synaptics/certstore.bin"
+  echo "Using existing pairing certstore at /etc/synaptics/certstore.bin"
+elif [ -f "certstore.bin" ]; then
+  cp certstore.bin /etc/synaptics/certstore.bin
+  chmod 600 /etc/synaptics/certstore.bin
+  chmod 700 /etc/synaptics
+  echo "Copied local certstore.bin to /etc/synaptics/certstore.bin"
 else
-  echo "ERROR: no pairing certstore found." >&2
-  echo "  The 009b sensor needs the host pairing material created by Windows Hello." >&2
-  echo "  Either:" >&2
-  echo "    1) keep a dual-boot Windows install with Windows Hello set up and re-run this installer, or" >&2
-  echo "    2) provide a certstore.bin from this exact sensor (same ECDH key)." >&2
-  echo "  A Windows-free fresh-pairing tool is not implemented yet." >&2
-  exit 1
+  echo "No existing certstore found. Pairing with 06cb:009b sensor directly over USB..."
+  /usr/local/bin/syna-tool pair /etc/synaptics/certstore.bin
+  chmod 600 /etc/synaptics/certstore.bin
+  chmod 700 /etc/synaptics
 fi
 
 # Existing template stores may predate the private-permission rule.
 find /var/lib/fprint/synaptics -type d -exec chmod 700 {} + 2>/dev/null || true
 find /var/lib/fprint/synaptics -type f -exec chmod 600 {} + 2>/dev/null || true
 
-echo "=== 5. Compiling syna-tool (release build) ==="
-cargo build --release --bin syna-tool
-install -m 755 target/release/syna-tool /usr/local/bin/syna-tool
-
-echo "=== 6. Installing D-Bus service, udev rules and PAM configs ==="
+echo "=== 7. Installing D-Bus service, udev rules and PAM configs ==="
 install -m 755 daemon/syna-fprintd /usr/local/bin/syna-fprintd
 install -m 644 daemon/fprintd.service /etc/systemd/system/fprintd.service
 install -m 644 daemon/70-synaptics-fingerprint.rules /etc/udev/rules.d/70-synaptics-fingerprint.rules
@@ -186,7 +151,7 @@ if [ -f "/etc/pam.d/polkit-1" ] && ! grep -q "pam_fprintd.so" /etc/pam.d/polkit-
   sed -i '1i auth sufficient pam_fprintd.so' /etc/pam.d/polkit-1
 fi
 
-echo "=== 7. Reloading system services ==="
+echo "=== 8. Reloading system services ==="
 udevadm control --reload-rules && udevadm trigger
 systemctl daemon-reload
 systemctl enable --now fprintd.service

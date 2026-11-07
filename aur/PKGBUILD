@@ -20,9 +20,6 @@ makedepends=(
     'git'
     '7zip'
 )
-optdepends=(
-    'hivex: automatic pairing certificate extraction from Windows partition'
-)
 provides=('synaptics-009b-fprintd')
 conflicts=('synaptics-009b-fprintd')
 install=synaptics-009b-fprintd.install
@@ -61,6 +58,11 @@ package() {
     # Binaries
     install -Dm755 "target/release/syna-tool" "${pkgdir}/usr/bin/syna-tool"
     install -Dm755 "daemon/syna-fprintd" "${pkgdir}/usr/bin/syna-fprintd"
+
+    # Firmware modules and assets
+    install -d "${pkgdir}/usr/share/synaptics/fw_modules"
+    install -Dm644 synaptics-prometheus/data/fw_modules/*.bin "${pkgdir}/usr/share/synaptics/fw_modules/"
+    install -Dm644 windows-driver/synaWudfBioUsb.dll "${pkgdir}/usr/share/synaptics/synaWudfBioUsb.dll"
 
     # Systemd drop-in override for fprintd.service
     install -d "${pkgdir}/usr/lib/systemd/system/fprintd.service.d"

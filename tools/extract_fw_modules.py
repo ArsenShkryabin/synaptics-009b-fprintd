@@ -27,6 +27,23 @@ DEFAULT_OUT = ROOT / "synaptics-prometheus" / "data" / "fw_modules"
 REGISTRY_RS = ROOT / "synaptics-prometheus" / "src" / "fw_registry.rs"
 
 
+import argparse
+import hashlib
+import json
+import re
+import struct
+import sys
+from pathlib import Path
+
+IMAGE_BASE = 0x180000000
+WILDCARD = 0xFFFF
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DLL = ROOT / "windows-driver" / "synaWudfBioUsb.dll"
+DEFAULT_OUT = ROOT / "synaptics-prometheus" / "data" / "fw_modules"
+REGISTRY_RS = ROOT / "synaptics-prometheus" / "src" / "fw_registry.rs"
+
+
 def parse_registry(path: Path) -> list[dict]:
     text = path.read_text()
     # rec(id9, id4, id0a, subkey, flags, len, src_addr)
@@ -61,8 +78,20 @@ def parse_registry(path: Path) -> list[dict]:
     return rows
 
 
-def rva(src_addr: int) -> int:
-    return src_addr - IMAGE_BASE
+def pe_vma_to_file_offset(vma: int, pe_bytes: bytes) -> int:
+    """Map a PE64 Virtual Memory Address (VMA) to its physical file offset."""
+    pe_off, = struct.unpack_from("<I", pe_bytes, 0x3c)
+    num_sections, = struct.unpack_from("<H", pe_bytes, pe_off + 6)
+    opt_hdr_size, = struct.unpack_from("<H", pe_bytes, pe_off + 20)
+    image_base, = struct.unpack_from("<Q", pe_bytes, pe_off + 24 + 24)
+    rva = vma - image_base
+    sec_start = pe_off + 24 + opt_hdr_size
+    for i in range(num_sections):
+        sec = pe_bytes[sec_start + i * 40 : sec_start + (i + 1) * 40]
+        vsize, vaddr, rsize, roff = struct.unpack_from("<IIII", sec, 8)
+        if vaddr <= rva < vaddr + vsize:
+            return roff + (rva - vaddr)
+    return vma - image_base
 
 
 def main() -> int:
@@ -96,7 +125,7 @@ def main() -> int:
     total_len = 0
 
     for i, row in enumerate(rows):
-        off = rva(row["src_addr"])
+        off = pe_vma_to_file_offset(row["src_addr"], blob)
         length = row["len"]
         end = off + length
         if off < 0 or end > len(blob):

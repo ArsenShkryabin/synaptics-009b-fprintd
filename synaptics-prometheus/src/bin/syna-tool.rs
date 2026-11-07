@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use synaptics_biometric::{ConditionedImage, HostBiometricBackend, MatchLevel};
@@ -64,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: syna-tool <enroll|verify|list|delete|inspect> ...");
+        eprintln!("Usage: syna-tool <pair|enroll|verify|list|delete|inspect> ...");
         std::process::exit(1);
     }
 
@@ -72,6 +72,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let store = TemplateStore::open(TEMPLATE_DIR)?;
 
     match cmd.as_str() {
+        "pair" => {
+            let out_path = args.get(2).map(|s| s.as_str()).unwrap_or(CERTSTORE_PATH);
+            let reuse_key = args.iter().any(|a| a == "--reuse-existing");
+            let host_sk = if reuse_key && Path::new(CERTSTORE_PATH).exists() {
+                let existing = std::fs::read(CERTSTORE_PATH)?;
+                let st = synaptics_crypto::pairing::parse_cert_store(&existing)?;
+                st.priv_blob.as_deref().and_then(|pb| {
+                    synaptics_crypto::pairing::unseal_host_key(
+                        pb,
+                        &synaptics_crypto::crypto::derive_gwk(b""),
+                    )
+                    .ok()
+                })
+            } else {
+                None
+            };
+            eprintln!("Pairing with 06cb:009b sensor (flashless path)...");
+            let (mut dev, (vid, pid)) = synaptics_prometheus::RawDevice::open_any()?;
+            eprintln!("Opened device {vid:04x}:{pid:04x}");
+            let certstore_bytes = synaptics_prometheus::init::pair_009b_flashless(&mut dev, host_sk)?;
+            if let Some(parent) = Path::new(out_path).parent() {
+                std::fs::create_dir_all(parent)?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+                }
+            }
+            std::fs::write(out_path, &certstore_bytes)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(out_path, std::fs::Permissions::from_mode(0o600));
+            }
+            println!("PAIRED:{}", out_path);
+        }
         "list" => {
             if args.len() < 3 {
                 eprintln!("Usage: syna-tool list <uid>");

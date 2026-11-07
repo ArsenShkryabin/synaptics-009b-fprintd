@@ -251,6 +251,17 @@ class FprintDevice(dbus.service.Object):
                 raise PermissionDenied("device is claimed by another caller")
         subprocess.run([SYNA_TOOL, "delete", str(target.pw_uid)], check=False)
 
+    @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="", out_signature="",
+                         sender_keyword="sender")
+    def DeleteEnrolledFingers2(self, sender=None):
+        logging.info(f"DeleteEnrolledFingers2 (sender {sender})")
+        if self.claimed_by:
+            username = self._require_claim(sender)
+        else:
+            username = self._caller_pw(sender).pw_name
+        target = self._resolve_user(username, sender)
+        subprocess.run([SYNA_TOOL, "delete", str(target.pw_uid)], check=False)
+
     @dbus.service.method(dbus_interface=DEVICE_INTERFACE, in_signature="s", out_signature="",
                          sender_keyword="sender")
     def DeleteEnrolledFinger(self, finger_name, sender=None):
@@ -484,6 +495,15 @@ class FprintManager(dbus.service.Object):
 
 
 def main():
+    certstore_path = "/etc/synaptics/certstore.bin"
+    if not os.path.exists(certstore_path):
+        logging.info("No pairing certstore at %s, auto-pairing via %s...", certstore_path, SYNA_TOOL)
+        try:
+            subprocess.run([SYNA_TOOL, "pair", certstore_path], check=True)
+            logging.info("Auto-pairing succeeded: %s", certstore_path)
+        except Exception as e:
+            logging.error("Auto-pairing failed: %s", e)
+
     bus = dbus.SystemBus()
     bus_name = dbus.service.BusName(BUS_NAME, bus)
     _mgr = FprintManager(bus_name)
