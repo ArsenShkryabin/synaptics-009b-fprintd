@@ -6,9 +6,9 @@
 [![Rust](https://img.shields.io/badge/Rust-2024%20Edition-orange.svg)](https://www.rust-lang.org/)
 [![Arch Linux AUR](https://img.shields.io/badge/AUR-synaptics--009b--fprintd--git-1793d1.svg)](aur/PKGBUILD)
 
-> **Linux driver & drop-in `fprintd` D-Bus service for Synaptics Prometheus `06cb:009b` (MSI SecurePad)**
+> **Autonomous Linux driver, drop-in `fprintd` D-Bus service & Touch ID-style GUI for Synaptics Prometheus `06cb:009b` (MSI SecurePad)**
 
-Fully functional biometric authentication (fingerprint enrollment, verification, `sudo`, lock screen, PAM) for Linux systems.
+Fully functional biometric authentication (fingerprint enrollment, verification, `sudo`, lock screen, PAM) with **100% Linux-native USB pairing**, zero Windows dependencies, and Apple Touch ID-style guided setup.
 
 ---
 
