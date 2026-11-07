@@ -66,25 +66,34 @@ sudo ./install.sh
 ```
 
 The installer will:
-1. Download the official 1.2 MB driver CAB from Microsoft Update Catalog and extract neural model weights (`metviper_*.bin`) and all 75 firmware modules.
-2. Pair directly with the sensor over USB (`syna-tool pair`) to generate `/etc/synaptics/certstore.bin` if not already present.
-3. Compile `syna-tool` in release mode.
-4. Install `syna-fprintd`, firmware assets to `/usr/share/synaptics/`, systemd service drop-in, udev rules, sleep hook, and PAM configurations.
-5. Enable and start the service.
+1. Automatically install all required system packages (`fprintd`, `python`, `python-dbus`, `python-gobject`, `python-pyqt6`, `libusb`, `rust`, `cargo`).
+2. Download the official 1.2 MB driver CAB from Microsoft Update Catalog and extract neural model weights (`metviper_*.bin`) and all 75 firmware modules.
+3. Pair directly with the sensor over USB (`syna-tool pair`) to generate `/etc/synaptics/certstore.bin` if not already present.
+4. Compile `syna-tool` in release mode.
+5. Install `syna-fprintd`, `syna-enroll-gui`, firmware assets to `/usr/share/synaptics/`, systemd service drop-in, udev rules, sleep hook, desktop launcher entry, and PAM configurations.
+6. Enable and start the service.
 
 ---
 
 ## 🖐️ Enrolling & Verifying Fingerprints
 
-Once installed, use standard Linux fingerprint commands:
+### Method A: Graphical Setup (`syna-enroll-gui`)
+Launch the Apple Touch ID-style guided enrollment tool directly from your application launcher or terminal:
+```bash
+syna-enroll-gui
+```
+Features 10 guided touch stages (center, micro-shift, flanks, tip, natural working angle), animated biometric ridge progress in Tokyo Night palette, and an instant post-enrollment test.
 
-### 1. Enroll your finger (e.g. left index finger):
+### Method B: Standard Linux CLI (`fprintd`)
+Once installed, standard Linux fingerprint commands work out of the box:
+
+#### 1. Enroll your finger (e.g. left index finger):
 ```bash
 fprintd-enroll -f left-index-finger
 ```
-Touch the touchpad sensor 5–6 times with slight shifts until it reports `enroll-completed`.
+Touch the touchpad sensor 8–10 times with slight shifts until it reports `enroll-completed`.
 
-### 2. Verify your fingerprint:
+#### 2. Verify your fingerprint:
 ```bash
 fprintd-verify
 ```
@@ -97,12 +106,12 @@ Verify started!
 Verify result: verify-match (done)
 ```
 
-### 3. List registered fingers:
+#### 3. List registered fingers:
 ```bash
 fprintd-list $USER
 ```
 
-### 4. Inspect stored biometric templates (offline diagnostic):
+#### 4. Inspect stored biometric templates (offline diagnostic):
 ```bash
 syna-tool inspect $(id -u)
 ```
@@ -162,6 +171,7 @@ The repository is structured into focused modules:
 - `synaptics-prometheus`: Core driver crate handling session establishment, stream arming, and frame capture.
 - `synaptics-prometheus-qm`: Reverse-engineered QuantumMatcher host biometric engine for minutiae matching.
 - `daemon/syna-fprintd`: Python D-Bus daemon bridging `net.reactivated.Fprint` to `syna-tool`.
+- `daemon/syna-enroll-gui`: Standalone minimalist PyQt6 enrollment application with Touch ID-style animations.
 - `tools/extract_qm_models.py`: Carves neural network weights (`metviper_weights.bin`, `metviper_mask.bin`, `metviper_lut.bin`) directly from `synaWudfBioUsb.dll`.
 - `tools/extract_fw_modules.py`: Extracts sensor ROM configuration modules.
 

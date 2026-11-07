@@ -5,8 +5,8 @@
 ## Context
 - **Problem:** For over 5 years (since 2019), the Synaptics `06cb:009b` fingerprint sensor was marked by upstream `libfprint` as "unlikely to ever be supported". It uses Match-on-Host (MoH) architecture with TLS 1.2 ECDH (P-256) encryption and Die Type-2 silicon. Existing tools like `python-validity` only supported Die Type-1 (`009a`, `0097`) via polled `0x51` commands, which causes hardware faults and infinite reboot loops on `009b`.
 - **Solution:** A high-performance user-space driver stack featuring a pure Rust core (`syna-tool`) with native EP `0x82` frames-sync stream capture, host-side QuantumMatcher neural minutiae matching, and a drop-in D-Bus daemon (`syna-fprintd`) implementing standard `net.reactivated.Fprint.Manager` and `net.reactivated.Fprint.Device` interfaces.
-- **System Integration:** Fully compatible with standard Linux fingerprint utilities (`fprintd-enroll`, `fprintd-verify`, `fprintd-list`), `pam_fprintd.so` (`sudo`, Polkit, SDDM, Hyprland/GNOME/KDE lock screens), and systemd suspend/resume hooks.
-- **Non-Destructive & Autonomous:** Extracts pairing data offline, preserving Windows Hello functionality in dual-boot setups. The installer downloads the official 1.2 MB driver CAB directly from Microsoft Update Catalog to carve neural weights without requiring Windows.
+- **System Integration:** Fully compatible with standard Linux fingerprint utilities (`fprintd-enroll`, `fprintd-verify`, `fprintd-list`), `pam_fprintd.so` (`sudo`, Polkit, SDDM, Hyprland/GNOME/KDE lock screens), modern GUI settings (`DeleteEnrolledFingers2`), standalone Apple Touch ID-style GUI (`syna-enroll-gui`), and systemd suspend/resume hooks.
+- **Non-Destructive & Autonomous:** 100% Linux-native USB pairing directly with the sensor without Windows or registry dumps. Extracts pairing data offline while preserving Windows Hello functionality in dual-boot setups. The installer downloads the official 1.2 MB driver CAB directly from Microsoft Update Catalog to carve neural weights without requiring Windows.
 
 ## Hardware Support
 - **Sensor:** Synaptics Prometheus `06cb:009b` (MSI SecurePad), Die Type-2 (`0x2449`).
@@ -25,4 +25,5 @@
 - [synaptics-prometheus/](synaptics-prometheus/): Core driver crate handling USB transport (`nusb`), TLS session establishment, stream arming, and frame reconstruction.
 - [synaptics-prometheus-qm/](synaptics-prometheus-qm/): Reverse-engineered host-side QuantumMatcher engine executing minutiae extraction and template matching.
 - [daemon/syna-fprintd](daemon/syna-fprintd): Python D-Bus daemon serving `net.reactivated.Fprint` interfaces with automatic client disconnect cleanup.
+- [daemon/syna-enroll-gui](daemon/syna-enroll-gui): Minimalist PyQt6 GUI enrollment tool with Touch ID-style vector animation in Omarchy Tokyo Night palette.
 - [daemon/synaptics-009b](daemon/synaptics-009b): Systemd sleep hook managing clean sensor release and post-resume re-enumeration.
