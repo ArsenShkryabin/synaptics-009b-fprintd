@@ -60,6 +60,22 @@ class PermissionDenied(dbus.DBusException):
 class NoEnrolledPrints(dbus.DBusException):
     _dbus_error_name = "net.reactivated.Fprint.Error.NoEnrolledPrints"
 
+class InvalidFingername(dbus.DBusException):
+    _dbus_error_name = "net.reactivated.Fprint.Error.InvalidFingername"
+
+
+VALID_FINGERS = {
+    "left-thumb",
+    "left-index-finger",
+    "left-middle-finger",
+    "left-ring-finger",
+    "left-little-finger",
+    "right-thumb",
+    "right-index-finger",
+    "right-middle-finger",
+    "right-ring-finger",
+    "right-little-finger",
+}
 
 class FprintDevice(dbus.service.Object):
     def __init__(self, bus_name):
@@ -292,6 +308,8 @@ class FprintDevice(dbus.service.Object):
                          sender_keyword="sender")
     def DeleteEnrolledFinger(self, finger_name, sender=None):
         logging.info(f"DeleteEnrolledFinger {finger_name} (sender {sender})")
+        if finger_name not in VALID_FINGERS:
+            raise InvalidFingername(f"invalid finger name: {finger_name}")
         if self.claimed_by:
             username = self._require_claim(sender)
         else:
@@ -322,6 +340,8 @@ class FprintDevice(dbus.service.Object):
                          sender_keyword="sender")
     def EnrollStart(self, finger_name, sender=None):
         logging.info(f"EnrollStart for finger: {finger_name} (sender {sender})")
+        if finger_name not in VALID_FINGERS:
+            raise InvalidFingername(f"invalid finger name: {finger_name}")
         username = self._require_claim(sender)
         target = self._resolve_user(username, sender)
         uid = target.pw_uid
@@ -409,6 +429,8 @@ class FprintDevice(dbus.service.Object):
                          sender_keyword="sender")
     def VerifyStart(self, finger_name, sender=None):
         logging.info(f"VerifyStart for finger: {finger_name} (sender {sender})")
+        if finger_name != "any" and finger_name not in VALID_FINGERS:
+            raise InvalidFingername(f"invalid finger name: {finger_name}")
         username = self._require_claim(sender)
         target = self._resolve_user(username, sender)
         uid = target.pw_uid
@@ -497,11 +519,8 @@ class FprintDevice(dbus.service.Object):
     def VerifyStop(self, sender=None):
         logging.info(f"VerifyStop requested (sender {sender})")
         self._require_claimant_for_stop(sender)
-        was_done = self.operation_done
         self.operation_done = True
         self._stop_current_operation()
-        if not was_done:
-            GLib.idle_add(self.VerifyStatus, "verify-unknown-error", True)
 
 
 class FprintManager(dbus.service.Object):
