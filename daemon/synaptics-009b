@@ -7,7 +7,9 @@ pre/*)
 	systemctl stop fprintd.service 2>/dev/null || true
 	;;
 post/*)
-	sleep 1
-	systemctl restart fprintd.service 2>/dev/null || true
+	# If fprintd is not active upon resume, start it once cleanly without sleep delays
+	if ! systemctl is-active --quiet fprintd.service; then
+		systemctl start fprintd.service 2>/dev/null || true
+	fi
 	;;
 esac
